@@ -9,8 +9,16 @@ class Wholebody:
     """detect human pose by dwpose
     """
     def __init__(self, model_det, model_pose, device="cpu"):
-        providers = ['CPUExecutionProvider'] if device == 'cpu' else ['CUDAExecutionProvider']
-        provider_options = None if device == 'cpu' else [{'device_id': 0}]
+        device_name = str(device)
+        if device_name == "cpu":
+            providers = ['CPUExecutionProvider']
+            provider_options = [{}]
+        else:
+            if 'CUDAExecutionProvider' not in ort.get_available_providers():
+                raise RuntimeError("DWPose CUDA requires ONNX Runtime with CUDAExecutionProvider")
+            device_id = int(device_name.split(":", 1)[1]) if ":" in device_name else 0
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            provider_options = [{'device_id': device_id}, {}]
 
         self.session_det = ort.InferenceSession(
             path_or_bytes=model_det, providers=providers,  provider_options=provider_options

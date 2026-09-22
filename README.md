@@ -81,11 +81,71 @@ models/
 
 ### Model inference
 
-A sample configuration for testing is provided as `test.yaml`. You can also easily modify the various configurations according to your needs.
+The default mode is now **source-first actor replacement** (`--mode replace`): keep the source shot, generate only the replacement actor for compositing, recover uncovered background from registered original frames, and use LaMa only for remaining holes. Full setup, model dependencies, commands, and limitations are in [REPLACEMENT.md](REPLACEMENT.md).
 
+```bash
+python inference.py --mode replace \
+  --ref_video_path dance.mp4 --ref_image_path new_actor.jpg \
+  --sam2_python /path/to/sam2-env/bin/python \
+  --sam2_checkpoint models/sam2.1_hiera_small.pt \
+  --lama_checkpoint models/big-lama.pt \
+  --device cuda:0 --output_file outputs/replaced.mp4
 ```
-python inference.py --inference_config configs/test.yaml
+
+Replacement preserves source frame count and FPS: omit `--fps` and use stride 1. It requires a separate SAM 2 environment, SAM 2 / LaMa weights and FFmpeg. Neural quality has not been validated on real footage in the delivery environment; it does not guarantee perfect motion or matting.
+
+#### Previous full-frame generation mode
+
+Pass all parameters on the command line; no YAML is loaded. `--help` works without importing model dependencies.
+
+```bash
+python inference.py --mode generate \
+  --ref_video_path assets/example_data/videos/pose1.mp4 \
+  --ref_image_path assets/example_data/images/demo1.jpg \
+  --device cuda:0 --dtype float16 \
+  --num_frames 72 --frames_overlap 6 \
+  --decode_chunk_size 8 --conditioning_fps 7 --fps 15 \
+  --output_file outputs/demo.mp4
 ```
+
+For a batch, pass videos and images in corresponding order. One image may be reused for all videos. The diffusion model is loaded once; pose sessions are released after extraction and recreated for the next task to conserve GPU memory.
+
+```bash
+python inference.py --mode generate \
+  --ref_video_path clips/a.mp4 clips/b.mp4 \
+  --ref_image_path images/a.jpg images/b.jpg \
+  --device cuda:0 --dtype float16 \
+  --output_dir outputs/batch --continue_on_error
+```
+
+| Option | Behavior / default |
+| --- | --- |
+| `--base_model_path` | Local directory or `stabilityai/stable-video-diffusion-img2vid-xt-1-1` |
+| `--ckpt_path` | `models/MimicMotion_1-1.pth` |
+| `--device` | `auto`: CUDA when available, otherwise CPU; also accepts `cuda:N` |
+| `--dtype` | CUDA: `float16`; CPU: `float32`. `--no_use_float16` is an alias for `--dtype float32` |
+| `--num_frames`, `--frames_overlap` | Temporal tile size `72`, overlap `6`; tile size is not output duration |
+| `--resolution`, `--sample_stride` | `576` (multiple of 64), `2` |
+| `--num_inference_steps`, `--guidance_scale` | `25`, `2.0`; guidance must exceed 1 for the current pipeline |
+| `--noise_aug_strength`, `--seed` | `0`, `42` |
+| `--decode_chunk_size` | `8`; lowering it reduces decoding memory demand |
+| `--conditioning_fps` | Model conditioning FPS: `7`; separate from export FPS |
+| `--fps` | Export FPS: `15`; changing it changes playback duration |
+| `--output_file` | Exact MP4 path, single task only |
+| `--output_dir` | `outputs/`; also stores run logs and summary |
+| `--overwrite` | Explicitly allow replacing output MP4 and sidecar JSON |
+| `--continue_on_error` | Process remaining tasks after failure; exit status remains nonzero |
+| `--log_file`, `--log_level` | Optional custom log path; default level `INFO` |
+
+Inputs and media are checked before loading the model. A video must provide at least `num_frames - 1` sampled frames (the reference adds one). The effective sampling stride is `sample_stride * max(1, int(source_fps / 24))`. Short clips are rejected with guidance to lower the tile size or stride; they are not silently padded. Missing or degenerate pose data is also rejected.
+
+The loader uses explicit component dtypes, without changing the global PyTorch default. It retains the original pretrained `fp16` weight variant, including when computing in FP32. CUDA pose extraction requires ONNX Runtime's CUDA provider and uses the selected GPU index. CPU mode uses FP32; actual hardware inference must be validated in your installed environment.
+
+Each successful MP4 has a JSON sidecar containing effective arguments, source media properties, checkpoint SHA-256, model path/ID, environment versions, and generation timings. A run summary records successes, failures, and unprocessed task counts. A model ID is not an immutable remote model revision; these records help trace runs but do not guarantee bit-identical results across hardware or dependency versions.
+
+Output names preserve multi-dot stems and include a unique run ID. Videos are encoded to a temporary file in the destination directory before publication. Without `--overwrite`, publication uses a hard link to prevent overwriting a concurrently created target (the filesystem must support hard links). MP4 and JSON are published separately: if JSON publication fails, the completed MP4 may remain, and the summary reports the output failure.
+
+Exit codes: `0` success, `2` invalid input/options, `3` model/runtime failure, `4` GPU out of memory, `5` file/output failure, `130` interruption. Batch processing returns the first task failure code. Initialization failures stop the entire batch.
 
 Tips: if your GPU memory is limited, try set env `PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256`.
 

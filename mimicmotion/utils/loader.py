@@ -13,7 +13,7 @@ from ..pipelines.pipeline_mimicmotion import MimicMotionPipeline
 logger = logging.getLogger(__name__)
 
 class MimicMotionModel(torch.nn.Module):
-    def __init__(self, base_model_path):
+    def __init__(self, base_model_path, dtype=torch.float16):
         """construnct base model components and load pretrained svd model except pose-net
         Args:
             base_model_path (str): pretrained svd model path
@@ -21,34 +21,37 @@ class MimicMotionModel(torch.nn.Module):
         super().__init__()
         self.unet = UNetSpatioTemporalConditionModel.from_config(
             UNetSpatioTemporalConditionModel.load_config(base_model_path, subfolder="unet"))
+        self.unet.to(dtype=dtype)
         self.vae = AutoencoderKLTemporalDecoder.from_pretrained(
-            base_model_path, subfolder="vae", torch_dtype=torch.float16, variant="fp16")
+            base_model_path, subfolder="vae", torch_dtype=dtype, variant="fp16")
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
-            base_model_path, subfolder="image_encoder", torch_dtype=torch.float16, variant="fp16")
+            base_model_path, subfolder="image_encoder", torch_dtype=dtype, variant="fp16")
         self.noise_scheduler = EulerDiscreteScheduler.from_pretrained(
             base_model_path, subfolder="scheduler")
         self.feature_extractor = CLIPImageProcessor.from_pretrained(
             base_model_path, subfolder="feature_extractor")
         # pose_net
-        self.pose_net = PoseNet(noise_latent_channels=self.unet.config.block_out_channels[0])
+        self.pose_net = PoseNet(noise_latent_channels=self.unet.config.block_out_channels[0]).to(dtype=dtype)
 
-def create_pipeline(infer_config, device):
+def create_pipeline(infer_config, device, dtype=torch.float16):
     """create mimicmotion pipeline and load pretrained weight
 
     Args:
         infer_config (str): 
         device (str or torch.device): "cpu" or "cuda:{device_id}"
     """
-    mimicmotion_models = MimicMotionModel(infer_config.base_model_path)
-    # Implement safe globals whitelist
-    if hasattr(torch.serialization, "safe_globals"):
-        allowed_modules = ['torch', 'collections', '__main__', 'mimicmotion']
-        with torch.serialization.safe_globals(*allowed_modules):
-            checkpoint = torch.load(infer_config.ckpt_path, map_location="cpu", weights_only=True)
-    else:
-        checkpoint = torch.load(infer_config.ckpt_path, map_location="cpu", weights_only=True)
+    mimicmotion_models = MimicMotionModel(infer_config.base_model_path, dtype=dtype)
+    # State dictionaries contain tensors; do not allow arbitrary checkpoint globals.
+    checkpoint = torch.load(infer_config.ckpt_path, map_location="cpu", weights_only=True)
+    if not isinstance(checkpoint, dict) or not checkpoint:
+        raise ValueError("Checkpoint must be a non-empty state dictionary")
     # Load model checkpoint
-    mimicmotion_models.load_state_dict(checkpoint, strict=False)
+    incompatible = mimicmotion_models.load_state_dict(checkpoint, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        logger.warning("Checkpoint mismatch: %d missing keys, %d unexpected keys",
+                       len(incompatible.missing_keys), len(incompatible.unexpected_keys))
+    # Explicitly cast every component; never change the process-wide default dtype.
+    mimicmotion_models.to(dtype=dtype)
     # Validate checkpoint structure before loading
     for key in checkpoint.keys():
         if not any(key.startswith(expected_prefix) for expected_prefix in ['unet', 'vae', 'image_encoder', 'pose_net']):
