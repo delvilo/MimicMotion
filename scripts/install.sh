@@ -7,6 +7,7 @@ trap 'printf "\nInstallation failed at line %s. Fix the reported error and rerun
 usage() {
   cat <<'EOF'
 Usage: bash scripts/install.sh [options]
+  --torch-index-url URL  Optional official CUDA wheel index; default: detect driver and resolve
   --prefix DIR           Runtime/environment directory (default: PROJECT/.runtime)
   --skip-system-deps     Do not use apt; require curl, git, tar, ffmpeg, ffprobe, flock
   --skip-models          Install environments only; not a complete ready-to-run install
@@ -24,8 +25,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PREFIX="$PROJECT/.runtime"
 SYSTEM=1 MODELS=1 GPU_CHECK=1 DRY_RUN=0
+TORCH_INDEX=""
 while (($#)); do
   case "$1" in
+    --torch-index-url) [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }; TORCH_INDEX="$2"; shift 2 ;;
     --prefix) [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }; PREFIX="$2"; shift 2 ;;
     --skip-system-deps) SYSTEM=0; shift ;;
     --skip-models) MODELS=0; shift ;;
@@ -39,11 +42,13 @@ done
 [[ -f "$PROJECT/inference.py" ]] || { echo 'Run this script from the repository scripts directory.' >&2; exit 2; }
 if ((DRY_RUN)); then
   printf 'Project: %s\nRuntime: %s\n' "$PROJECT" "$PREFIX"
+  printf 'PyTorch index: %s\n' "${TORCH_INDEX:-auto (driver + official wheel index discovery)}"
   printf 'System packages: %s; model downloads: %s; GPU verification: %s\n' "$SYSTEM" "$MODELS" "$GPU_CHECK"
   cat <<'EOF'
 Plan: Python 3.11 (managed uv); isolated main and SAM 2 virtual environments.
-Main: torch 2.0.1 + torchvision 0.15.2 CUDA 11.8; ONNX Runtime 1.16.3 / cuDNN 8.
-SAM 2: torch 2.5.1 + torchvision 0.20.1 CUDA 11.8; pinned SAM 2 source; no CUDA extension build.
+Main: resolve matching torch/torchvision releases, requiring CUDA runtime > 11.7.
+ONNX Runtime: resolve an ABI-compatible range from actual torch CUDA/cuDNN versions.
+SAM 2: torch >= 2.5.1 and matching torchvision; same selected CUDA family, isolated environment.
 Models: DWPose x2, MimicMotion 1.1, SVD runtime files, SAM 2.1 small, LaMa TorchScript.
 Then verify imports / GPU / model loading, record package versions, and create a single-GPU launcher.
 No Git branch changes and no driver installation.
@@ -94,8 +99,12 @@ fi
 export UV_PYTHON_INSTALL_DIR="$PREFIX/python"
 export UV_CACHE_DIR="$PREFIX/uv-cache"
 "$UV" python install 3.11
+BOOTSTRAP_PY="$("$UV" python find 3.11)"
+TORCH_INDEX="$("$BOOTSTRAP_PY" "$SCRIPT_DIR/cuda_runtime.py" --select-index "$TORCH_INDEX")"
+ENV_ROOT="$PREFIX/envs/${TORCH_INDEX##*/}"
+printf 'Selected CUDA wheel index: %s\nEnvironment root: %s\n' "$TORCH_INDEX" "$ENV_ROOT"
 for name in main sam2; do
-  ENV_DIR="$PREFIX/$name"
+  ENV_DIR="$ENV_ROOT/$name"
   if [[ -e "$ENV_DIR" && ! -f "$ENV_DIR/.mimicmotion-installer" ]]; then
     echo "Refusing to modify an unowned environment: $ENV_DIR" >&2; exit 2
   fi
@@ -109,11 +118,15 @@ for name in main sam2; do
   "$ENV_DIR/bin/python" -c 'import sys; assert sys.version_info[:2] == (3,11), "Python 3.11 required"'
   "$ENV_DIR/bin/python" -m pip install 'pip==24.3.1' 'setuptools==75.6.0' 'wheel==0.45.1'
 done
-MAIN_PY="$PREFIX/main/bin/python"
-SAM_PY="$PREFIX/sam2/bin/python"
-"$MAIN_PY" -m pip install 'torch==2.0.1+cu118' 'torchvision==0.15.2+cu118' --index-url https://download.pytorch.org/whl/cu118
+MAIN_PY="$ENV_ROOT/main/bin/python"
+SAM_PY="$ENV_ROOT/sam2/bin/python"
+MAIN_TORCH_REQUIREMENT="$("$MAIN_PY" "$SCRIPT_DIR/cuda_runtime.py" --torch-requirement "$TORCH_INDEX" --role main)"
+SAM_TORCH_REQUIREMENT="$("$SAM_PY" "$SCRIPT_DIR/cuda_runtime.py" --torch-requirement "$TORCH_INDEX" --role sam2)"
+printf 'Resolving PyTorch from %s\n' "$TORCH_INDEX"
+"$MAIN_PY" -m pip install --upgrade "$MAIN_TORCH_REQUIREMENT" torchvision --index-url "$TORCH_INDEX"
 "$MAIN_PY" -m pip install -r "$SCRIPT_DIR/requirements-main.txt"
-"$SAM_PY" -m pip install 'torch==2.5.1+cu118' 'torchvision==0.20.1+cu118' --index-url https://download.pytorch.org/whl/cu118
+"$MAIN_PY" "$SCRIPT_DIR/cuda_runtime.py" --install-ort
+"$SAM_PY" -m pip install --upgrade "$SAM_TORCH_REQUIREMENT" 'torchvision>=0.20.1' --index-url "$TORCH_INDEX"
 "$SAM_PY" -m pip install -r "$SCRIPT_DIR/requirements-sam2.txt"
 SAM_REV=2b90b9f5ceec907a1c18123530e92e794ad901a4
 SAM_SOURCE="$PREFIX/sam2-source"
@@ -129,7 +142,7 @@ SAM2_BUILD_CUDA=0 "$SAM_PY" -m pip install --no-build-isolation --no-deps "$SAM_
 "$MAIN_PY" -m pip check
 "$SAM_PY" -m pip check
 
-# Main's CUDA 11/cuDNN 8 libraries must not leak into SAM 2's cuDNN 9 process.
+# Main environment CUDA/cuDNN libraries must not leak into the independent SAM 2 process.
 # The SAM launcher strips the exact main-library prefix added by the main launcher.
 SAM_LAUNCHER="$PREFIX/bin/sam2-python"
 {

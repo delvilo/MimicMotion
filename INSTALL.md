@@ -35,10 +35,31 @@ Token 只透過環境傳遞，不寫入安裝腳本、啟動器或執行紀錄�
 2. 在 `.runtime/` 安裝固定版 uv，驗證官方下載 checksum，並建立受管理 Python 3.11。
 3. 建立兩個獨立環境，不升級系統 Python 或原本 conda 環境：
 
-| 環境 | 固定的核心版本 |
+| 環境 | 版本解析方式 |
 | --- | --- |
-| `.runtime/main` | PyTorch 2.0.1 + torchvision 0.15.2，CUDA 11.8；ONNX Runtime GPU 1.16.3，cuDNN 8 相容組合 |
-| `.runtime/sam2` | PyTorch 2.5.1 + torchvision 0.20.1，CUDA 11.8；SAM 2 固定 commit `2b90b9f5ceec907a1c18123530e92e794ad901a4` |
+| `.runtime/envs/cuXXX/main` | 依所選 CUDA wheel 來源解析 PyTorch 與 torchvision 的相容版本；CUDA runtime 必須 > 11.7 |
+| `.runtime/envs/cuXXX/sam2` | PyTorch >= 2.5.1、相容 torchvision；固定 SAM 2 程式碼版本，與主環境隔離 |
+
+不再固定 `torch==2.0.1`、`torch==2.5.1` 或 CUDA 11.8。預設讀取 NVIDIA 驅動可支援的 CUDA 上限，查詢官方 wheel 目錄，選擇目前支援範圍內的最新 CUDA family；再由 pip 解析該來源上的套件版本。不同 CUDA family 使用不同子目錄，保留舊環境，避免混用 CUDA 函式庫。
+
+也可明確指定官方來源，**但不指定 PyTorch 版本**：
+
+```bash
+bash scripts/install.sh --torch-index-url https://download.pytorch.org/whl/cu126
+```
+
+`cu126` 只是選擇 CUDA 12.6 wheel 來源的例子，並非預設或硬編碼要求。無 GPU 主機使用 `--skip-gpu-check` 時，需要明確提供目標主機的 wheel 來源；不能從不存在的驅動推斷目標版本。
+
+ONNX Runtime 依實際 `torch.version.cuda` 和 `torch.backends.cudnn.version()` 選擇 ABI 相容範圍：
+
+| CUDA／cuDNN | 主環境解析條件 |
+| --- | --- |
+| CUDA 11.8／cuDNN 8 | PyTorch >= 2.0、< 2.4；ONNX Runtime >= 1.16、< 1.19 |
+| CUDA 12.x／cuDNN 9 | PyTorch >= 2.4；ONNX Runtime >= 1.19、< 1.27 |
+| CUDA 13.x／cuDNN 9 | PyTorch >= 2.4；ONNX Runtime >= 1.27、< 1.30 |
+
+這些是已知 wheel 的相容區間，不是單一版本鎖定。CUDA 11.8 主環境的 PyTorch 上限是 cuDNN 8 ABI 要求；SAM 2 的獨立環境仍使用 >= 2.5.1。未列出的 CUDA/cuDNN 組合會明確拒絕，避免裝好後偷偷退回 CPU。將來出現新的 CUDA family 或 ONNX Runtime ABI 時，需要更新此相容性表，不能保證任意未來版本都可用。
+
 
 4. 安裝 `scripts/requirements-main.txt` 與 `scripts/requirements-sam2.txt`，檢查套件相依關係。SAM 2 的可選 CUDA extension 關閉，因此不需要 nvcc；官方說明指出部分後處理功能可能受限。
 5. 下載 DWPose 的兩個 ONNX、MimicMotion 1.1、SVD 所需的 FP16 VAE／image encoder 與設定、SAM 2.1 small、LaMa TorchScript。
@@ -62,7 +83,7 @@ SVD 只下載本程式實際使用的檔案：UNet 由設定建立並載入 Mimi
 
 啟動器會指定主環境、SAM 2 專用啟動器及本地模型路徑；不必手動 activate 環境。執行時會切回專案根目錄，所以素材若不在專案內，請使用絕對路徑。
 
-因兩個 PyTorch 版本的 cuDNN 主版本不同，SAM 2 啟動器會移除主環境注入的動態函式庫路徑，避免 cuDNN 8 蓋過 SAM 2 的 cuDNN 9。
+兩個環境可能使用不同的 cuDNN 主版本，SAM 2 啟動器會移除主環境注入的動態函式庫路徑，避免互相干擾。
 
 原本整幅生成可加 `--mode generate`。main 不接受 `--aux_device`；不要在此單 GPU 命令加上雙卡參數。
 
@@ -76,6 +97,7 @@ bash scripts/install.sh --skip-system-deps
 ```
 
 - `--dry-run`：顯示計畫，不改檔案、不下載、不呼叫 apt。
+- `--torch-index-url URL`：選擇官方 CUDA wheel 來源；省略時依驅動自動選擇，不固定 PyTorch 發行版本。
 - `--prefix DIR`：改變環境、快取、啟動器與安裝紀錄位置；模型仍在專案 `models/`。啟動器改用 `DIR/bin/run-mimicmotion`。
 - `--skip-system-deps`：系統套件已安裝、或沒有 apt／sudo 時使用。缺少 FFmpeg 等必要命令仍會報錯。
 - `--skip-models`：只安裝環境；之後不帶此選項重跑才能完成模型準備。
@@ -95,3 +117,19 @@ bash scripts/install.sh --skip-system-deps
 - https://pytorch.org/get-started/previous-versions/
 - https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
 - https://github.com/facebookresearch/sam2#installation
+
+
+## 使用 Conda 的版本範圍
+
+`environment.yaml` 現在使用 `pytorch`、`torchvision`、`pytorch-cuda>11.7`，由 conda 解析來源中可用的版本；不再指定 PyTorch 2.0.1 或 CUDA 11.7。Conda channel 可提供的版本與 pip wheel 不一定相同，完整安裝仍建議使用上述 Bash 腳本。
+
+自行建立 conda 環境時，可以在安裝主依賴後配置相容的 ONNX Runtime：
+
+```bash
+python -m pip install -r scripts/requirements-main.txt
+python scripts/cuda_runtime.py --install-ort
+```
+
+`--install-ort` 只根據已安裝的 PyTorch 配置 ONNX Runtime，不會擅自替換 PyTorch。若 conda 解出 CUDA 11.8／cuDNN 9 等未支援組合，它會報錯；可改用腳本選擇相容版本範圍。
+
+已測試選擇邏輯與拒絕條件；尚未在所有 CUDA family 上安裝並執行完整模型。實際套件版本會寫入 `.runtime/reports/`，方便重現與排錯。升級版 PyTorch 是否能搭配所有既有模型 API，仍須以安裝器的 import／CUDA／模型檢查及實片推理確認。

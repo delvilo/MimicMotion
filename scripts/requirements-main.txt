@@ -1,4 +1,5 @@
-# PyTorch / torchvision are installed separately from the CUDA 11.8 wheel index.
+# PyTorch / torchvision are resolved separately for the selected CUDA family.
+# ONNX Runtime is selected by scripts/cuda_runtime.py after inspecting torch/cuDNN.
 numpy==1.26.4
 huggingface-hub==0.25.2
 diffusers==0.27.0
@@ -7,7 +8,6 @@ accelerate==0.30.1
 decord==0.6.0
 einops==0.8.0
 omegaconf==2.3.0
-onnxruntime-gpu==1.16.3
 opencv-python-headless==4.10.0.84
 matplotlib==3.8.4
 Pillow==10.4.0

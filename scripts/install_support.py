@@ -87,6 +87,8 @@ def download_models(project):
 
 
 def check_environment(project, skip_gpu):
+    from cuda_runtime import verify_installed
+    print("Selected runtime:",verify_installed())
     import numpy
     import torch
     import torchvision

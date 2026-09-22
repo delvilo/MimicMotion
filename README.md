@@ -27,7 +27,7 @@ For the complete **main / single-GPU** installation (isolated Python environment
 bash scripts/install.sh
 ```
 
-See [INSTALL.md](INSTALL.md) for Hugging Face access, requirements and the generated launcher. Dual-GPU code remains on its separate branch and is not enabled by this installer.
+PyTorch/torchvision releases are resolved from an automatically selected or user-specified CUDA wheel index (CUDA runtime > 11.7), with ABI-compatible ONNX Runtime selection. No exact PyTorch/CUDA release is pinned. See [INSTALL.md](INSTALL.md) for Hugging Face access, compatibility ranges and the generated launcher. Dual-GPU code remains on its separate branch and is not enabled by this installer.
 
 The following is the original minimal environment setup:
 

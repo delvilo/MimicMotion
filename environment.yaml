@@ -4,9 +4,9 @@ channels:
   - nvidia
 dependencies:
   - python=3.11
-  - pytorch=2.0.1
-  - torchvision=0.15.2
-  - pytorch-cuda=11.7
+  - pytorch
+  - torchvision
+  - "pytorch-cuda>11.7"
   - pip
   - pip:
     - diffusers==0.27.0
