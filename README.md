@@ -21,6 +21,16 @@ For the initial released version of the model checkpoint, it supports generating
 
 ### Environment setup
 
+For the complete **main / single-GPU** installation (isolated Python environments, model downloads and checks):
+
+```bash
+bash scripts/install.sh
+```
+
+See [INSTALL.md](INSTALL.md) for Hugging Face access, requirements and the generated launcher. Dual-GPU code remains on its separate branch and is not enabled by this installer.
+
+The following is the original minimal environment setup:
+
 Recommend python 3+ with torch 2.x are validated with an Nvidia V100 GPU. Follow the command below to install all the dependencies of python:
 
 ```
