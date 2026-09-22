@@ -164,3 +164,8 @@ The minimum VRAM requirement for the 16-frame U-Net model is 8GB; however, the V
   year={2025}
 }
 ```
+
+
+## Dual T4 component placement
+
+Use `--device cuda:0 --aux_device cuda:1 --dtype float16` to place UNet on GPU 0 and PoseNet, image encoder, VAE, and replacement helpers on GPU 1. Decode chunks default to 2 in this mode. See [DUAL_T4.md](DUAL_T4.md) for commands, limitations, and validation status.
