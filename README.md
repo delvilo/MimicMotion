@@ -1,25 +1,9 @@
-# MimicMotion [ICML 2025]
+# MimicMotion
 
 <a href='http://tencent.github.io/MimicMotion'><img src='https://img.shields.io/badge/Project-Page-Green'></a> <a href='https://arxiv.org/abs/2406.19680'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
 
 <p align="center">
 <b>MimicMotion: High-Quality Human Motion Video Generation with Confidence-aware Pose Guidance</b>
-<br/>
-<i>Yuang Zhang<sup>1,2</sup>, Jiaxi Gu<sup>1</sup>, Li-Wen Wang<sup>1</sup>, Han Wang<sup>1,2</sup>, Junqi Cheng<sup>1</sup>, Yuefeng Zhu<sup>1</sup>, Fangyuan Zou<sup>1</sup></i>
-<br/>
-[<sup>1</sup>Tencent  <sup>2</sup>Shanghai Jiao Tong University]
-</p>
-
-<p align="center">
-  <img src="assets/figures/preview_1.gif" width="100" />
-  <img src="assets/figures/preview_2.gif" width="100" />
-  <img src="assets/figures/preview_3.gif" width="100" />
-  <img src="assets/figures/preview_4.gif" width="100" />
-  <img src="assets/figures/preview_5.gif" width="100" />
-  <img src="assets/figures/preview_6.gif" width="100" />
-  <br/>
-  <span>Highlights: <b>rich details</b>, <b> good temporal smoothness</b>, and <b>long video length</b>. </span>
-</p>
 
 ## Overview
 
@@ -30,12 +14,6 @@
 </p>
 
 In recent years, generative artificial intelligence has achieved significant advancements in the field of image generation, spawning a variety of applications. However, video generation still faces considerable challenges in various aspects such as controllability, video length, and richness of details, which hinder the application and popularization of this technology. In this work, we propose a controllable video generation framework, dubbed *MimicMotion*, which can generate high-quality videos of arbitrary length with any motion guidance. Comparing with previous methods, our approach has several highlights. Firstly, with confidence-aware pose guidance, temporal smoothness can be achieved so model robustness can be enhanced with large-scale training data. Secondly, regional loss amplification based on pose confidence significantly eases the distortion of image significantly. Lastly, for generating long smooth videos, a progressive latent fusion strategy is proposed. By this means, videos of arbitrary length can be generated with acceptable resource consumption. With extensive experiments and user studies, MimicMotion demonstrates significant improvements over previous approaches in multiple aspects.
-
-## News
-
-* `[2025-05-03]`: &#x1F389; Our paper is accepted by ICML 2025. Congratulations and many thanks to the co-authors!
-* `[2024-07-08]`: 🔥 [A superior model checkpoint](https://huggingface.co/tencent/MimicMotion/blob/main/MimicMotion_1-1.pth) has been released as version 1.1. The maximum number of video frames has now been expanded from 16 to 72, significantly enhancing the video quality!
-* `[2024-07-01]`: Project page, code, technical report and [a basic model checkpoint](https://huggingface.co/tencent/MimicMotion/blob/main/MimicMotion_1.pth) are released. A better checkpoint supporting higher quality video generation will be released very soon. Stay tuned!
 
 ## Quickstart
 
