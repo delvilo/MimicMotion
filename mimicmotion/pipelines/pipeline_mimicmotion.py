@@ -538,6 +538,10 @@ class MimicMotionPipeline(DiffusionPipeline):
 
         # 8. Denoising loop
         self._num_timesteps = len(timesteps)
+        if not 0 <= tile_overlap < tile_size or tile_size < 2:
+            raise ValueError("Require tile_size >= 2 and 0 <= tile_overlap < tile_size")
+        if num_frames < tile_size:
+            raise ValueError(f"Need at least {tile_size} total frames, received {num_frames}")
         indices = [[0, *range(i + 1, min(i + tile_size, num_frames))] for i in
                    range(0, num_frames - tile_size + 1, tile_size - tile_overlap)]
         if indices[-1][-1] < num_frames - 1:
@@ -546,8 +550,9 @@ class MimicMotionPipeline(DiffusionPipeline):
         self.pose_net.to(device)
         self.unet.to(device)
 
-        with torch.cuda.device(device):
-            torch.cuda.empty_cache()
+        if torch.device(device).type == "cuda":
+            with torch.cuda.device(device):
+                torch.cuda.empty_cache()
 
         with self.progress_bar(total=len(timesteps) * len(indices)) as progress_bar:
             for i, t in enumerate(timesteps):
