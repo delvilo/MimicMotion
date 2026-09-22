@@ -196,7 +196,7 @@ def segment(frames, args, directory, g):
         with log_path.open('w') as log:
             result = subprocess.run([args.sam2_python,str(worker),'--jobs',str(job_file),
                                      '--checkpoint',str(Path(args.sam2_checkpoint).resolve()),
-                                     '--model_config',args.sam2_model_config,'--device',args.device],
+                                     '--model_config',args.sam2_model_config,'--device',args.aux_device or args.device],
                                     stdout=log,stderr=subprocess.STDOUT)
         if result.returncode:
             raise RuntimeError('SAM 2 failed: '+log_path.read_text()[-3000:])
@@ -339,7 +339,7 @@ def render(frames, task, args, directory, g, temp_output):
     protect_paths = mask_paths(args.occlusion_masks,len(frames)) if args.occlusion_masks else None
     prompts = json.loads((directory/'prompts.json').read_text())
     background = SourceBackground(reader,source_dir,prompts['blockers'],args.mask_padding,args.background_candidates)
-    lama = LamaFill(args.lama_checkpoint,args.device)
+    lama = LamaFill(args.lama_checkpoint,args.aux_device or args.device)
     info = task['media']['source_stream']; fps = info['avg_frame_rate']
     cmd = ['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f"{g['width']}x{g['height']}",
            '-framerate',fps,'-i','pipe:0','-i',task['video'],'-map','0:v:0']

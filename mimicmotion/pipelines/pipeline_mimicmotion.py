@@ -236,8 +236,11 @@ class MimicMotionPipeline(DiffusionPipeline):
                 # we only pass num_frames_in if it's expected
                 decode_kwargs["num_frames"] = num_frames_in
 
-            frame = self.vae.decode(latents[i: i + decode_chunk_size], **decode_kwargs).sample
+            vae_parameter = next(self.vae.parameters())
+            chunk = latents[i: i + decode_chunk_size].to(device=vae_parameter.device, dtype=vae_parameter.dtype)
+            frame = self.vae.decode(chunk, **decode_kwargs).sample
             frames.append(frame.cpu())
+            del chunk, frame
         frames = torch.cat(frames, dim=0)
 
         # [batch*frames, channels, height, width] -> [batch, channels, frames, height, width]
@@ -355,6 +358,7 @@ class MimicMotionPipeline(DiffusionPipeline):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         return_dict: bool = True,
         device: Union[str, torch.device] =None,
+        auxiliary_device: Union[str, torch.device] =None,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -461,15 +465,17 @@ class MimicMotionPipeline(DiffusionPipeline):
             batch_size = len(image)
         else:
             batch_size = image.shape[0]
-        device = device if device is not None else self._execution_device
+        device = torch.device(device if device is not None else self._execution_device)
+        auxiliary_device = torch.device(auxiliary_device) if auxiliary_device is not None else device
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         self._guidance_scale = max_guidance_scale
 
         # 3. Encode input image
-        self.image_encoder.to(device)
-        image_embeddings = self._encode_image(image, device, num_videos_per_prompt, self.do_classifier_free_guidance)
+        self.image_encoder.to(auxiliary_device)
+        image_embeddings = self._encode_image(image, auxiliary_device, num_videos_per_prompt,
+                                              self.do_classifier_free_guidance).to(device)
         self.image_encoder.cpu()
 
         # NOTE: Stable Diffusion Video was conditioned on fps - 1, which
@@ -481,14 +487,15 @@ class MimicMotionPipeline(DiffusionPipeline):
         noise = randn_tensor(image.shape, generator=generator, device=device, dtype=image.dtype)
         image = image + noise_aug_strength * noise
 
-        self.vae.to(device)
+        self.vae.to(auxiliary_device)
         image_latents = self._encode_vae_image(
-            image,
-            device=device,
+            image.to(auxiliary_device),
+            device=auxiliary_device,
             num_videos_per_prompt=num_videos_per_prompt,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
         )
-        image_latents = image_latents.to(image_embeddings.dtype)
+        image_latents = image_latents.to(device=device, dtype=image_embeddings.dtype)
+        del image, noise
         self.vae.cpu()
 
         # Repeat the image latents for each frame so we can concatenate them with the noise
@@ -547,7 +554,7 @@ class MimicMotionPipeline(DiffusionPipeline):
         if indices[-1][-1] < num_frames - 1:
             indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
 
-        self.pose_net.to(device)
+        self.pose_net.to(auxiliary_device)
         self.unet.to(device)
 
         if torch.device(device).type == "cuda":
@@ -571,7 +578,9 @@ class MimicMotionPipeline(DiffusionPipeline):
                 for idx in indices:
 
                     # classification-free inference
-                    pose_latents = self.pose_net(image_pose[idx].to(device))
+                    pose_latents = self.pose_net(
+                        image_pose[idx].to(device=auxiliary_device, dtype=next(self.pose_net.parameters()).dtype)
+                    ).to(device=device, dtype=latent_model_input.dtype)
                     _noise_pred = self.unet(
                         latent_model_input[:1, idx],
                         t,
@@ -619,8 +628,20 @@ class MimicMotionPipeline(DiffusionPipeline):
         self.unet.cpu()
 
         if not output_type == "latent":
-            self.vae.decoder.to(device)
+            # Move the full latent video to host RAM before decoding. Only each
+            # decode chunk enters GPU 1; do not duplicate the video across GPUs.
+            if auxiliary_device != device:
+                latents = latents.cpu()
+                # Denoising intermediates are no longer needed on GPU 0.
+                image_latents = image_embeddings = added_time_ids = guidance_scale = None
+                latent_model_input = noise_pred = noise_pred_cnt = pose_latents = _noise_pred = None
+                noise_pred_uncond = noise_pred_cond = None
+                if device.type == "cuda":
+                    with torch.cuda.device(device):
+                        torch.cuda.empty_cache()
+            self.vae.to(auxiliary_device)
             frames = self.decode_latents(latents, num_frames, decode_chunk_size)
+            self.vae.cpu()
             frames = tensor2vid(frames, self.image_processor, output_type=output_type)
         else:
             frames = latents

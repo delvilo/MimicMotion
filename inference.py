@@ -70,7 +70,7 @@ def run_pipeline(pipeline, image_pixels, pose_pixels, device, task_config):
         height=pose_pixels.shape[-2], width=pose_pixels.shape[-1], fps=task_config.conditioning_fps,
         noise_aug_strength=task_config.noise_aug_strength, num_inference_steps=task_config.num_inference_steps,
         generator=generator, min_guidance_scale=task_config.guidance_scale, 
-        max_guidance_scale=task_config.guidance_scale, decode_chunk_size=task_config.decode_chunk_size, output_type="pt", device=device
+        max_guidance_scale=task_config.guidance_scale, decode_chunk_size=task_config.decode_chunk_size, output_type="pt", device=device, auxiliary_device=task_config.aux_device
     ).frames.cpu()
     video_frames = (frames * 255.0).to(torch.uint8)
 
@@ -106,9 +106,10 @@ def parse_args(argv=None):
     parser.add_argument("--no_use_float16", action="store_true",
                         help="Compatibility alias for --dtype float32")
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:N")
+    parser.add_argument("--aux_device", default=None, help="Second CUDA device for PoseNet, image encoder, VAE, SAM 2 and LaMa; e.g. cuda:1")
     parser.add_argument("--dtype", choices=("float16", "float32"), default=None,
                         help="Default: float16 on CUDA, float32 on CPU")
-    parser.add_argument("--decode_chunk_size", type=int, default=8, help="Frames decoded per chunk")
+    parser.add_argument("--decode_chunk_size", type=int, default=None, help="Frames decoded per chunk")
     parser.add_argument("--conditioning_fps", type=int, default=7, help="Model conditioning FPS, separate from output FPS")
     parser.add_argument("--output_file", help="Exact .mp4 path; single input only")
     parser.add_argument("--overwrite", action="store_true", help="Allow replacing existing output and metadata")
@@ -122,6 +123,8 @@ def parse_args(argv=None):
         args.sample_stride = 1 if args.mode == 'replace' else 2
     if args.fps is None and args.mode == 'generate':
         args.fps = 15
+    if args.decode_chunk_size is None:
+        args.decode_chunk_size = 2 if args.aux_device else 8
     validate_arguments(args, parser)
     for name in ("num_frames", "resolution", "num_inference_steps", "sample_stride", "fps", "decode_chunk_size", "conditioning_fps"):
         if getattr(args, name) is not None and getattr(args, name) <= 0:
@@ -239,8 +242,31 @@ def resolve_runtime(args, torch):
     dtype = args.dtype or ("float16" if device.type == "cuda" else "float32")
     if device.type == "cpu" and dtype == "float16":
         raise ValueError("Use --dtype float32 with CPU")
+    if args.aux_device is not None:
+        try:
+            auxiliary = torch.device(args.aux_device)
+        except (RuntimeError, ValueError) as exc:
+            raise ValueError(f"Invalid --aux_device: {args.aux_device}") from exc
+        if device.type != "cuda" or auxiliary.type != "cuda":
+            raise ValueError("Dual-GPU mode requires two CUDA devices")
+        if auxiliary.index is None:
+            raise ValueError("Specify an explicit auxiliary GPU index, e.g. cuda:1")
+        if auxiliary.index >= torch.cuda.device_count():
+            raise ValueError(f"Auxiliary CUDA device index out of range: {auxiliary.index}")
+        if auxiliary == device:
+            raise ValueError("--device and --aux_device must select different GPUs")
+        if dtype != "float16":
+            raise ValueError("The dual-T4 component split requires --dtype float16")
+        args.aux_device = str(auxiliary)
     args.device, args.dtype = str(device), dtype
     return device, getattr(torch, dtype)
+
+
+def clear_gpu_cache(args, torch):
+    for name in dict.fromkeys((args.device, args.aux_device)):
+        if name and name.startswith("cuda"):
+            with torch.cuda.device(name):
+                torch.cuda.empty_cache()
 
 
 def probe_media(task, args):
@@ -366,6 +392,7 @@ def main(args):
         if any(not task["error"] for task in tasks):
             import torch
             device, dtype = resolve_runtime(args, torch)
+            logger.info("Component placement: UNet=%s; PoseNet/image encoder/VAE=%s",device,args.aux_device or device)
             from mimicmotion.utils.geglu_patch import patch_geglu_inplace
             patch_geglu_inplace()
             from mimicmotion.utils.loader import create_pipeline
@@ -373,7 +400,7 @@ def main(args):
             started = time.perf_counter()
             pipeline = create_pipeline(args, device, dtype=dtype)
             logger.info("Model loaded in %.2fs; device=%s dtype=%s", time.perf_counter() - started, device, dtype)
-            processor = DWposeDetector("models/DWPose/yolox_l.onnx", "models/DWPose/dw-ll_ucoco_384.onnx", device=device)
+            processor = DWposeDetector("models/DWPose/yolox_l.onnx", "models/DWPose/dw-ll_ucoco_384.onnx", device=args.aux_device or device)
         for index, task in enumerate(tasks):
             started = time.perf_counter()
             stage = "validation"
@@ -407,9 +434,7 @@ def main(args):
                 if args.mode == 'replace':
                     from mimicmotion.utils.replacement import render
                     pipeline.to('cpu')
-                    if device.type == 'cuda':
-                        with torch.cuda.device(device):
-                            torch.cuda.empty_cache()
+                    clear_gpu_cache(args, torch)
                     fd, temp_name = tempfile.mkstemp(prefix='.replacement-',suffix='.mp4',dir=task['output'].parent)
                     os.close(fd)
                     temp_video = Path(temp_name)
@@ -446,9 +471,8 @@ def main(args):
                     processor.release_memory()
                 if pipeline is not None:
                     pipeline.to("cpu")
-                if torch is not None and args.device.startswith("cuda"):
-                    with torch.cuda.device(device):
-                        torch.cuda.empty_cache()
+                if torch is not None:
+                    clear_gpu_cache(args, torch)
             records.append(record)
     except KeyboardInterrupt:
         status = 130

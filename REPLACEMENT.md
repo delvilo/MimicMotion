@@ -116,3 +116,8 @@ python inference.py \
 - 同時保留所有姿態幀、生成幀和 SAM 2 追蹤狀態需要記憶體。長片全幀生成與跨幀搜尋比之前抽幀生成更慢、更吃記憶體。
 
 已完成：CLI、合成遮罩、原背景像素不變規則、平移鏡頭下的真實背景回填、不相干場景拒絕、無損編解碼、以及用模擬 AI 檢查僅在缺失區域補景。這些檢查不等於已驗證 MimicMotion / SAM 2 / LaMa 的真實模型效果；交付環境沒有這些權重與完整 GPU 推理依賴。
+
+
+## Dual T4 component placement
+
+Use `--device cuda:0 --aux_device cuda:1 --dtype float16` to place UNet on GPU 0 and PoseNet, image encoder, VAE, and replacement helpers on GPU 1. Decode chunks default to 2 in this mode. See [DUAL_T4.md](DUAL_T4.md) for commands, limitations, and validation status.
