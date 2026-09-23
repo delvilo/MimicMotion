@@ -21,6 +21,10 @@ In recent years, generative artificial intelligence has achieved significant adv
 
 For the initial released version of the model checkpoint, it supports generating videos with a maximum of 72 frames at a 576x1024 resolution. If you encounter insufficient memory issues, you can appropriately reduce the number of frames.
 
+### 在 Google Colab 執行
+
+[在 Colab 開啟筆記本](https://colab.research.google.com/github/delvilo/MimicMotion/blob/main/MimicMotion_Colab.ipynb)，可安裝單 GPU 環境、上傳或從 Drive 選取素材並執行人物替換、整幅生成或透明背景輸出。也可在 Colab 使用 [`scripts/colab.sh`](scripts/colab.sh) 安裝及推論；步驟見 [COLAB.md](COLAB.md)。
+
 ### Environment setup
 
 For the complete **main / single-GPU** installation (isolated Python environments, model downloads and checks):
