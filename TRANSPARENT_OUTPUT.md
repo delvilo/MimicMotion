@@ -1,5 +1,7 @@
 # 透明背景影片 / Transparent actor output
 
+> **專案說明：** 本專案 fork 自 [Tencent/MimicMotion](https://github.com/Tencent/MimicMotion)；本 fork 新增的功能由 ChatGPT 完成。
+
 加入 `--transparent_background`，只輸出生成角色及 Alpha 通道。此選項在 `main` 與 `codex/dual-t4-component-split` 都可使用；未指定時，仍依原本模式輸出一般 MP4。
 
 ```bash
@@ -50,3 +52,5 @@ python -m unittest discover -s tests -v
 ```
 
 測試包含兩種編碼的 Alpha 解碼驗證、分數幀率、參數驗證、略過背景/LaMa/SAM 的遮罩輸入路徑，以及 SAM 2 裝置路由。不取代帶模型權重的 GPU 端到端驗證。
+
+完整參數、操作步驟與限制請見[繁體中文使用說明](TRANSPARENT_OUTPUT.zh-TW.md)。

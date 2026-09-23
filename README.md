@@ -1,5 +1,7 @@
 # MimicMotion
 
+> **專案說明：** 本專案 fork 自 [Tencent/MimicMotion](https://github.com/Tencent/MimicMotion)；本 fork 新增的功能由 ChatGPT 完成。
+
 <a href='http://tencent.github.io/MimicMotion'><img src='https://img.shields.io/badge/Project-Page-Green'></a> <a href='https://arxiv.org/abs/2406.19680'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
 
 <p align="center">
@@ -155,4 +157,4 @@ The minimum VRAM requirement for the 16-frame U-Net model is 8GB; however, the V
 
 ## 透明背景輸出
 
-新增 `--transparent_background --alpha_codec prores4444`，輸出具 Alpha 通道的 `.mov`，另支援無損 `qtrle`。請見 [透明影片參數與範例](TRANSPARENT_OUTPUT.md)。
+以 `--transparent_background` 輸出帶 Alpha 通道的 `.mov`，可選 ProRes 4444 或無損 QTRLE。使用方式與限制請見[繁體中文完整說明](TRANSPARENT_OUTPUT.zh-TW.md)及[功能摘要](TRANSPARENT_OUTPUT.md)。
