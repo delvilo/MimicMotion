@@ -147,3 +147,7 @@ The minimum VRAM requirement for the 16-frame U-Net model is 8GB; however, the V
 ## Dual T4 component placement
 
 Use `--device cuda:0 --aux_device cuda:1 --dtype float16` to place UNet on GPU 0 and PoseNet, image encoder, VAE, and replacement helpers on GPU 1. Decode chunks default to 2 in this mode. See [DUAL_T4.md](DUAL_T4.md) for commands, limitations, and validation status.
+
+## 透明背景輸出
+
+新增 `--transparent_background --alpha_codec prores4444`，輸出具 Alpha 通道的 `.mov`，另支援無損 `qtrle`。請見 [透明影片參數與範例](TRANSPARENT_OUTPUT.md)。

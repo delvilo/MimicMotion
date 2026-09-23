@@ -22,16 +22,21 @@ logger = logging.getLogger(__name__)
 def check_dependencies(args):
     if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
         raise ValueError('Replacement requires ffmpeg and ffprobe on PATH')
-    if not args.no_ai_background and not Path(args.lama_checkpoint).is_file():
+    transparent = args.transparent_background
+    if transparent:
+        from mimicmotion.utils.transparent import check_encoder
+        check_encoder(args.alpha_codec)
+    if not transparent and not args.no_ai_background and not Path(args.lama_checkpoint).is_file():
         raise ValueError(f'LaMa checkpoint missing: {args.lama_checkpoint}; supply it or use --no_ai_background')
-    if not (args.source_masks and args.replacement_masks):
+    if not (args.replacement_masks and (transparent or args.source_masks)):
         if not Path(args.sam2_checkpoint).is_file():
             raise ValueError(f'SAM 2 checkpoint missing: {args.sam2_checkpoint}')
         worker = Path(__file__).resolve().parents[2] / 'scripts' / 'replacement_masks.py'
         result = subprocess.run([args.sam2_python, str(worker), '--check'], capture_output=True, text=True)
         if result.returncode:
             raise ValueError(f'SAM 2 environment unavailable: {result.stderr[-2000:]}')
-    import cv2  # ORB camera registration, already used by DWPose.
+    if not transparent:
+        import cv2  # ORB camera registration, already used by DWPose.
 
 
 def probe_source(video):
@@ -164,7 +169,8 @@ def prepare(task, args, processor, directory):
             points[...,1] = (points[...,1]*g['resized_height'] + g['y'])/g['canvas_height']
         poses.append(draw_pose(pose, g['canvas_height'], g['canvas_width']))
         # JPEGs are segmentation inputs only; final RGB pixels are read again from the original video.
-        Image.fromarray(rgb).save(source_dir/f'{i:06d}.jpg', quality=95)
+        if not args.transparent_background:
+            Image.fromarray(rgb).save(source_dir/f'{i:06d}.jpg', quality=95)
     (directory/'prompts.json').write_text(json.dumps(dict(boxes=boxes, blockers=blocked, geometry=g)))
     pose_tensor = torch.from_numpy(np.stack(poses).copy()).float() / 127.5 - 1
     image_tensor = torch.from_numpy(np.asarray(reference).copy().transpose(2,0,1)[None]).float() / 127.5 - 1
@@ -177,13 +183,15 @@ def restore_frame(frame, g):
     return np.asarray(image.resize((g['width'],g['height']), Image.Resampling.LANCZOS))
 
 
-def segment(frames, args, directory, g):
+def segment(frames, args, directory, g, generated_only=False):
     generated = directory/'generated'; generated.mkdir()
     for i, frame in enumerate(frames):
         rgb = restore_frame(frame.permute(1,2,0).numpy(), g)
         Image.fromarray(rgb).save(generated/f'{i:06d}.jpg', quality=95)
     jobs = []
-    for kind, override in (('source',args.source_masks), ('generated',args.replacement_masks)):
+    inputs = [('generated',args.replacement_masks)] if generated_only else [
+        ('source',args.source_masks), ('generated',args.replacement_masks)]
+    for kind, override in inputs:
         if override:
             mask_paths(override,len(frames))
         else:
