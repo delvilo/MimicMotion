@@ -110,7 +110,7 @@ def parse_args(argv=None):
                         help="Default: float16 on CUDA, float32 on CPU")
     parser.add_argument("--decode_chunk_size", type=int, default=8, help="Frames decoded per chunk")
     parser.add_argument("--conditioning_fps", type=int, default=7, help="Model conditioning FPS, separate from output FPS")
-    parser.add_argument("--output_file", help="Exact .mp4 path; single input only")
+    parser.add_argument("--output_file", help="Exact output path: .mov for transparency, otherwise .mp4; single input only")
     parser.add_argument("--overwrite", action="store_true", help="Allow replacing existing output and metadata")
     parser.add_argument("--continue_on_error", action="store_true", help="Continue other tasks after a failure; exit remains nonzero")
     parser.add_argument("--log_level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO")
@@ -148,8 +148,9 @@ def parse_args(argv=None):
         parser.error("Provide one reference image or one image per video")
     if args.output_file and len(args.ref_video_path) != 1:
         parser.error("--output_file requires exactly one video")
-    if args.output_file and Path(args.output_file).suffix.lower() != ".mp4":
-        parser.error("--output_file must have a .mp4 extension")
+    extension = ".mov" if args.transparent_background else ".mp4"
+    if args.output_file and Path(args.output_file).suffix.lower() != extension:
+        parser.error(f"--output_file must have a {extension} extension")
     return args
 
 
@@ -196,11 +197,12 @@ def plan_tasks(args, run_id):
         args.base_model_path = str(model.resolve())
     elif args.base_model_path.startswith(("/", ".", "~")):
         raise ValueError(f"Base model directory not found: {model}")
+    extension = ".mov" if args.transparent_background else ".mp4"
     tasks = []
     for index, video in enumerate(args.ref_video_path):
         image = args.ref_image_path[0 if len(args.ref_image_path) == 1 else index]
         output = (Path(args.output_file) if args.output_file else
-                  Path(args.output_dir) / f"{Path(video).stem}_{run_id}_{index + 1:03d}.mp4")
+                  Path(args.output_dir) / f"{Path(video).stem}_{run_id}_{index + 1:03d}{extension}")
         output = output.expanduser().resolve()
         task = dict(video=video, image=image, output=output, error=None)
         try:
@@ -268,6 +270,9 @@ def probe_media(task, args):
             if masks:
                 mask_paths(masks,len(reader))
     sampled = len(range(0, len(reader), stride))
+    if args.transparent_background and args.replacement_masks and args.mode == "generate":
+        from mimicmotion.utils.replacement import mask_paths
+        mask_paths(args.replacement_masks, sampled)
     if sampled + 1 < args.num_frames:
         raise ValueError(f"Video yields {sampled} sampled frames plus one reference frame; "
                          f"at least {args.num_frames} total required. Reduce --num_frames or --sample_stride.")
@@ -335,7 +340,7 @@ def main(args):
     if log_path in protected:
         raise ValueError("Log path must differ from inputs, checkpoint, and outputs")
     setup_logging(log_path, args.log_level)
-    if args.mode == 'replace':
+    if args.mode == 'replace' or args.transparent_background:
         from mimicmotion.utils.replacement import check_dependencies
         check_dependencies(args)
     tasks = plan_tasks(args, run_id)
@@ -382,6 +387,7 @@ def main(args):
                           media=task.get("media"), started_at=datetime.now(timezone.utc).isoformat())
             frames = pose_pixels = image_pixels = None
             replacement_work = None
+            replacement_geometry = None
             try:
                 if task["error"]:
                     raise ValueError(task["error"])
@@ -404,17 +410,24 @@ def main(args):
                 record.update(status="success", output_frames=int(frames.shape[0]),
                               generation_seconds=time.perf_counter() - started)
                 stage = "output"
-                if args.mode == 'replace':
+                if args.mode == 'replace' or args.transparent_background:
                     from mimicmotion.utils.replacement import render
+                    if replacement_work is None:
+                        replacement_work = Path(tempfile.mkdtemp(prefix='.transparent-', dir=task['output'].parent))
                     pipeline.to('cpu')
                     if device.type == 'cuda':
                         with torch.cuda.device(device):
                             torch.cuda.empty_cache()
-                    fd, temp_name = tempfile.mkstemp(prefix='.replacement-',suffix='.mp4',dir=task['output'].parent)
+                    fd, temp_name = tempfile.mkstemp(prefix='.replacement-',suffix=task['output'].suffix,dir=task['output'].parent)
                     os.close(fd)
                     temp_video = Path(temp_name)
                     try:
-                        record['replacement'] = render(frames,task,args,replacement_work,replacement_geometry,temp_video)
+                        if args.transparent_background:
+                            from mimicmotion.utils.transparent import render_transparent
+                            record['transparency'] = render_transparent(
+                                frames,task,args,replacement_work,replacement_geometry,temp_video,processor)
+                        else:
+                            record['replacement'] = render(frames,task,args,replacement_work,replacement_geometry,temp_video)
                         publish(temp_video,task['output'],args.overwrite)
                         write_json(task['output'].with_suffix('.json'),record,args.overwrite)
                     finally:

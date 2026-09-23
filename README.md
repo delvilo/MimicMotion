@@ -152,3 +152,7 @@ The minimum VRAM requirement for the 16-frame U-Net model is 8GB; however, the V
   year={2025}
 }
 ```
+
+## 透明背景輸出
+
+新增 `--transparent_background --alpha_codec prores4444`，輸出具 Alpha 通道的 `.mov`，另支援無損 `qtrle`。請見 [透明影片參數與範例](TRANSPARENT_OUTPUT.md)。
