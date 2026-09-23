@@ -1,5 +1,7 @@
 # 兩張 T4：元件分卡模式（方案 D）
 
+> **專案說明：** 本專案 fork 自 [Tencent/MimicMotion](https://github.com/Tencent/MimicMotion)；本 fork 新增的功能由 ChatGPT 完成。
+
 此版本將同一支影片的模型元件放在兩張 CUDA GPU。不是兩支影片各跑一張卡，也沒有把 UNet 的網路層拆到兩卡。
 
 | 元件／資料 | 位置 | 處理階段 |
@@ -65,3 +67,7 @@ CUDA_VISIBLE_DEVICES=0,1 python inference.py \
 已完成 Python 編譯、CLI 單／雙卡預設、拒絕相同／不存在／CPU 輔助裝置、FP16 約束，以及對實際解碼函式的模擬張量測試（5 幀按 2、2、1 搬到 VAE 所在裝置）。已檢查單卡既有流程。
 
 尚未在兩張實體 T4 和完整權重上跑過模型；跨卡 PyTorch 運算、峰值顯存、輸出品質與執行時間仍需硬體驗收。
+
+## 透明背景輸出
+
+雙 GPU 分支支援透明背景 `.mov` 輸出，SAM 2 會放在 GPU 1。請參閱[繁體中文透明影片說明](TRANSPARENT_OUTPUT.zh-TW.md)，其中列有遮罩格式、參數、編碼器與限制。
