@@ -1,6 +1,6 @@
-# MimicMotion
+ # MimicMotion
 
-> **專案說明：** 本專案 fork 自 [Tencent/MimicMotion](https://github.com/Tencent/MimicMotion)；本 fork 新增的功能由 ChatGPT 完成。
+> **專案說明：** 本 fork 新增的功能由 ChatGPT 6 完成。
 
 <a href='http://tencent.github.io/MimicMotion'><img src='https://img.shields.io/badge/Project-Page-Green'></a> <a href='https://arxiv.org/abs/2406.19680'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
 
