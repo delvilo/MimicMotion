@@ -95,7 +95,6 @@ def check_environment(project, skip_gpu):
     import cv2
     import decord
     import onnxruntime as ort
-    import av
     from mimicmotion.utils.loader import create_pipeline
     from mimicmotion.utils.replacement import render
     if not skip_gpu:
