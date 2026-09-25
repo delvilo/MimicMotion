@@ -18,6 +18,7 @@ from diffusers.utils.torch_utils import is_compiled_module, randn_tensor
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 
 from ..modules.pose_net import PoseNet
+from ..utils.utils import prepare_extra_step_kwargs
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -313,21 +314,7 @@ class MimicMotionPipeline(DiffusionPipeline):
         return self._num_timesteps
 
     def prepare_extra_step_kwargs(self, generator, eta):
-        # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
-        # eta (η) is only used with the DDIMScheduler, it will be ignored for other schedulers.
-        # eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
-        # and should be between [0, 1]
-
-        accepts_eta = "eta" in set(inspect.signature(self.scheduler.step).parameters.keys())
-        extra_step_kwargs = {}
-        if accepts_eta:
-            extra_step_kwargs["eta"] = eta
-
-        # check if the scheduler accepts generator
-        accepts_generator = "generator" in set(inspect.signature(self.scheduler.step).parameters.keys())
-        if accepts_generator:
-            extra_step_kwargs["generator"] = generator
-        return extra_step_kwargs
+        return prepare_extra_step_kwargs(self.scheduler, generator, eta)
 
     @torch.no_grad()
     def __call__(
@@ -525,8 +512,8 @@ class MimicMotionPipeline(DiffusionPipeline):
         )
         latents = latents.repeat(1, num_frames // tile_size + 1, 1, 1, 1)[:, :num_frames]
 
-        # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, 0.0)
+        # 6. Prepare extra step kwargs.
+        extra_step_kwargs = prepare_extra_step_kwargs(self.scheduler, generator, 0.0)
 
         # 7. Prepare guidance scale
         guidance_scale = torch.linspace(min_guidance_scale, max_guidance_scale, num_frames).unsqueeze(0)
