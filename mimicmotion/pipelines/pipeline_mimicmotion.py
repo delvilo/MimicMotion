@@ -329,6 +329,115 @@ class MimicMotionPipeline(DiffusionPipeline):
             extra_step_kwargs["generator"] = generator
         return extra_step_kwargs
 
+    def _prepare_vae_latents(
+        self,
+        image: Union[PIL.Image.Image, List[PIL.Image.Image], torch.FloatTensor],
+        height: int,
+        width: int,
+        num_frames: int,
+        noise_aug_strength: float,
+        num_videos_per_prompt: int,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
+        device: Union[str, torch.device],
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        image = self.image_processor.preprocess(image, height=height, width=width).to(device)
+        noise = randn_tensor(image.shape, generator=generator, device=device, dtype=image.dtype)
+        image = image + noise_aug_strength * noise
+
+        self.vae.to(device)
+        image_latents = self._encode_vae_image(
+            image,
+            device=device,
+            num_videos_per_prompt=num_videos_per_prompt,
+            do_classifier_free_guidance=self.do_classifier_free_guidance,
+        )
+        image_latents = image_latents.to(dtype)
+        self.vae.cpu()
+
+        # Repeat the image latents for each frame so we can concatenate them with the noise
+        # image_latents [batch, channels, height, width] ->[batch, num_frames, channels, height, width]
+        image_latents = image_latents.unsqueeze(1).repeat(1, num_frames, 1, 1, 1)
+        return image_latents
+
+    def _prepare_guidance_scale(
+        self,
+        min_guidance_scale: float,
+        max_guidance_scale: float,
+        num_frames: int,
+        batch_size: int,
+        num_videos_per_prompt: int,
+        device: Union[str, torch.device],
+        dtype: torch.dtype,
+        ndim: int,
+    ) -> torch.Tensor:
+        guidance_scale = torch.linspace(min_guidance_scale, max_guidance_scale, num_frames).unsqueeze(0)
+        guidance_scale = guidance_scale.to(device, dtype)
+        guidance_scale = guidance_scale.repeat(batch_size * num_videos_per_prompt, 1)
+        guidance_scale = _append_dims(guidance_scale, ndim)
+        return guidance_scale
+
+    def _get_tile_indices(self, num_frames: int, tile_size: int, tile_overlap: int) -> List[List[int]]:
+        if not 0 <= tile_overlap < tile_size or tile_size < 2:
+            raise ValueError("Require tile_size >= 2 and 0 <= tile_overlap < tile_size")
+        if num_frames < tile_size:
+            raise ValueError(f"Need at least {tile_size} total frames, received {num_frames}")
+        indices = [[0, *range(i + 1, min(i + tile_size, num_frames))] for i in
+                   range(0, num_frames - tile_size + 1, tile_size - tile_overlap)]
+        if indices[-1][-1] < num_frames - 1:
+            indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
+        return indices
+
+    def _predict_noise(
+        self,
+        latent_model_input: torch.Tensor,
+        t: Union[int, torch.Tensor],
+        image_embeddings: torch.Tensor,
+        added_time_ids: torch.Tensor,
+        image_pose: torch.Tensor,
+        image_latents: torch.Tensor,
+        indices: List[List[int]],
+        tile_size: int,
+        num_frames: int,
+        image_only_indicator: bool,
+        device: Union[str, torch.device],
+        progress_bar,
+    ) -> torch.Tensor:
+        noise_pred = torch.zeros_like(image_latents)
+        noise_pred_cnt = image_latents.new_zeros((num_frames,))
+        weight = (torch.arange(tile_size, device=device) + 0.5) * 2. / tile_size
+        weight = torch.minimum(weight, 2 - weight)
+        for idx in indices:
+            # classification-free inference
+            pose_latents = self.pose_net(image_pose[idx].to(device))
+            _noise_pred = self.unet(
+                latent_model_input[:1, idx],
+                t,
+                encoder_hidden_states=image_embeddings[:1],
+                added_time_ids=added_time_ids[:1],
+                pose_latents=None,
+                image_only_indicator=image_only_indicator,
+                return_dict=False,
+            )[0]
+            noise_pred[:1, idx] += _noise_pred * weight[:, None, None, None]
+
+            # normal inference
+            _noise_pred = self.unet(
+                latent_model_input[1:, idx],
+                t,
+                encoder_hidden_states=image_embeddings[1:],
+                added_time_ids=added_time_ids[1:],
+                pose_latents=pose_latents,
+                image_only_indicator=image_only_indicator,
+                return_dict=False,
+            )[0]
+            noise_pred[1:, idx] += _noise_pred * weight[:, None, None, None]
+
+            noise_pred_cnt[idx] += weight
+            progress_bar.update()
+        noise_pred.div_(noise_pred_cnt[:, None, None, None])
+        return noise_pred
+
     @torch.no_grad()
     def __call__(
         self,
@@ -354,7 +463,7 @@ class MimicMotionPipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         return_dict: bool = True,
-        device: Union[str, torch.device] =None,
+        device: Union[str, torch.device] = None,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -477,23 +586,17 @@ class MimicMotionPipeline(DiffusionPipeline):
         fps = fps - 1
 
         # 4. Encode input image using VAE
-        image = self.image_processor.preprocess(image, height=height, width=width).to(device)
-        noise = randn_tensor(image.shape, generator=generator, device=device, dtype=image.dtype)
-        image = image + noise_aug_strength * noise
-
-        self.vae.to(device)
-        image_latents = self._encode_vae_image(
-            image,
-            device=device,
+        image_latents = self._prepare_vae_latents(
+            image=image,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            noise_aug_strength=noise_aug_strength,
             num_videos_per_prompt=num_videos_per_prompt,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            generator=generator,
+            device=device,
+            dtype=image_embeddings.dtype,
         )
-        image_latents = image_latents.to(image_embeddings.dtype)
-        self.vae.cpu()
-
-        # Repeat the image latents for each frame so we can concatenate them with the noise
-        # image_latents [batch, channels, height, width] ->[batch, num_frames, channels, height, width]
-        image_latents = image_latents.unsqueeze(1).repeat(1, num_frames, 1, 1, 1)
 
         # 5. Get Added Time IDs
         added_time_ids = self._get_add_time_ids(
@@ -507,10 +610,9 @@ class MimicMotionPipeline(DiffusionPipeline):
         )
         added_time_ids = added_time_ids.to(device)
 
-        # 4. Prepare timesteps
+        # 6. Prepare timesteps and latents
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, None)
 
-        # 5. Prepare latent variables
         num_channels_latents = self.unet.config.in_channels
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
@@ -525,27 +627,23 @@ class MimicMotionPipeline(DiffusionPipeline):
         )
         latents = latents.repeat(1, num_frames // tile_size + 1, 1, 1, 1)[:, :num_frames]
 
-        # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, 0.0)
 
         # 7. Prepare guidance scale
-        guidance_scale = torch.linspace(min_guidance_scale, max_guidance_scale, num_frames).unsqueeze(0)
-        guidance_scale = guidance_scale.to(device, latents.dtype)
-        guidance_scale = guidance_scale.repeat(batch_size * num_videos_per_prompt, 1)
-        guidance_scale = _append_dims(guidance_scale, latents.ndim)
-
-        self._guidance_scale = guidance_scale
+        self._guidance_scale = self._prepare_guidance_scale(
+            min_guidance_scale=min_guidance_scale,
+            max_guidance_scale=max_guidance_scale,
+            num_frames=num_frames,
+            batch_size=batch_size,
+            num_videos_per_prompt=num_videos_per_prompt,
+            device=device,
+            dtype=latents.dtype,
+            ndim=latents.ndim,
+        )
 
         # 8. Denoising loop
         self._num_timesteps = len(timesteps)
-        if not 0 <= tile_overlap < tile_size or tile_size < 2:
-            raise ValueError("Require tile_size >= 2 and 0 <= tile_overlap < tile_size")
-        if num_frames < tile_size:
-            raise ValueError(f"Need at least {tile_size} total frames, received {num_frames}")
-        indices = [[0, *range(i + 1, min(i + tile_size, num_frames))] for i in
-                   range(0, num_frames - tile_size + 1, tile_size - tile_overlap)]
-        if indices[-1][-1] < num_frames - 1:
-            indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
+        indices = self._get_tile_indices(num_frames, tile_size, tile_overlap)
 
         self.pose_net.to(device)
         self.unet.to(device)
@@ -564,40 +662,20 @@ class MimicMotionPipeline(DiffusionPipeline):
                 latent_model_input = torch.cat([latent_model_input, image_latents], dim=2)
 
                 # predict the noise residual
-                noise_pred = torch.zeros_like(image_latents)
-                noise_pred_cnt = image_latents.new_zeros((num_frames,))
-                weight = (torch.arange(tile_size, device=device) + 0.5) * 2. / tile_size
-                weight = torch.minimum(weight, 2 - weight)
-                for idx in indices:
-
-                    # classification-free inference
-                    pose_latents = self.pose_net(image_pose[idx].to(device))
-                    _noise_pred = self.unet(
-                        latent_model_input[:1, idx],
-                        t,
-                        encoder_hidden_states=image_embeddings[:1],
-                        added_time_ids=added_time_ids[:1],
-                        pose_latents=None,
-                        image_only_indicator=image_only_indicator,
-                        return_dict=False,
-                    )[0]
-                    noise_pred[:1, idx] += _noise_pred * weight[:, None, None, None]
-
-                    # normal inference
-                    _noise_pred = self.unet(
-                        latent_model_input[1:, idx],
-                        t,
-                        encoder_hidden_states=image_embeddings[1:],
-                        added_time_ids=added_time_ids[1:],
-                        pose_latents=pose_latents,
-                        image_only_indicator=image_only_indicator,
-                        return_dict=False,
-                    )[0]
-                    noise_pred[1:, idx] += _noise_pred * weight[:, None, None, None]
-
-                    noise_pred_cnt[idx] += weight
-                    progress_bar.update()
-                noise_pred.div_(noise_pred_cnt[:, None, None, None])
+                noise_pred = self._predict_noise(
+                    latent_model_input=latent_model_input,
+                    t=t,
+                    image_embeddings=image_embeddings,
+                    added_time_ids=added_time_ids,
+                    image_pose=image_pose,
+                    image_latents=image_latents,
+                    indices=indices,
+                    tile_size=tile_size,
+                    num_frames=num_frames,
+                    image_only_indicator=image_only_indicator,
+                    device=device,
+                    progress_bar=progress_bar,
+                )
 
                 # perform guidance
                 if self.do_classifier_free_guidance:
