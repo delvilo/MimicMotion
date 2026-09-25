@@ -72,7 +72,7 @@ class PoseNet(nn.Module):
             print(f"There is no model file in {pretrained_model_path}")
         print(f"loaded PoseNet's pretrained weights from {pretrained_model_path}.")
 
-        state_dict = torch.load(pretrained_model_path, map_location="cpu")
+        state_dict = torch.load(pretrained_model_path, map_location="cpu", weights_only=True)
         model = PoseNet(noise_latent_channels=320)
 
         model.load_state_dict(state_dict, strict=True)
