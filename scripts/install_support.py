@@ -93,7 +93,6 @@ def check_environment(project, skip_gpu):
     import torch
     import torchvision
     import cv2
-    import decord
     import onnxruntime as ort
     import av
     from mimicmotion.utils.loader import create_pipeline
