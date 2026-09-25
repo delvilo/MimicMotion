@@ -1,6 +1,6 @@
 """Resolve CUDA wheel families and ONNX Runtime ABI ranges, without exact torch pins."""
 import argparse
-import importlib.metadata
+from importlib import metadata
 import re
 import subprocess
 import sys
@@ -96,7 +96,7 @@ def verify_installed():
     from packaging.requirements import Requirement
     selection = installed_selection()
     required = Requirement(selection['ort_requirement'])
-    actual = importlib.metadata.version('onnxruntime-gpu')
+    actual = metadata.version('onnxruntime-gpu')
     if actual not in required.specifier:
         raise ValueError(f'Installed ONNX Runtime {actual} conflicts with {selection}; '
                          'run python scripts/cuda_runtime.py --install-ort')
