@@ -92,7 +92,6 @@ def check_environment(project, skip_gpu):
     import numpy
     import torch
     import torchvision
-    import cv2
     import decord
     import onnxruntime as ort
     import av
