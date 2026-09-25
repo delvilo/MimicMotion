@@ -54,7 +54,7 @@ def create_pipeline(infer_config, device, dtype=torch.float16):
     mimicmotion_models.to(dtype=dtype)
     # Validate checkpoint structure before loading
     for key in checkpoint.keys():
-        if not any(key.startswith(expected_prefix) for expected_prefix in ['unet', 'vae', 'image_encoder', 'pose_net']):
+        if not any(key.startswith(expected_prefix) for expected_prefix in ('unet', 'vae', 'image_encoder', 'pose_net')):
             logger.warning(f"Unexpected key in checkpoint: {key}")
     pipeline = MimicMotionPipeline(
         vae=mimicmotion_models.vae, 
