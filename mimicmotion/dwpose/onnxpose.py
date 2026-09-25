@@ -61,8 +61,8 @@ def inference(sess: ort.InferenceSession, img: np.ndarray) -> np.ndarray:
     """
     all_out = []
     # build input
-    for i in range(len(img)):
-        input = [img[i].transpose(2, 0, 1)]
+    for sub_img in img:
+        input = [sub_img.transpose(2, 0, 1)]
 
         # build output
         sess_input = {sess.get_inputs()[0].name: input}
