@@ -94,7 +94,6 @@ def check_environment(project, skip_gpu):
     import torchvision
     import decord
     import onnxruntime as ort
-    import av
     from mimicmotion.utils.loader import create_pipeline
     if not skip_gpu:
         if not torch.cuda.is_available():
