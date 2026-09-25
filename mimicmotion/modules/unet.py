@@ -292,7 +292,7 @@ class UNetSpatioTemporalConditionModel(ModelMixin, ConfigMixin, UNet2DConditionL
                 processor. This is strongly recommended when setting trainable attention processors.
 
         """
-        count = len(self.attn_processors.keys())
+        count = len(self.attn_processors)
 
         if isinstance(processor, dict) and len(processor) != count:
             raise ValueError(
