@@ -399,16 +399,21 @@ class UNetSpatioTemporalConditionModel(ModelMixin, ConfigMixin, UNet2DConditionL
         # 1. time
         timesteps = timestep
         if not torch.is_tensor(timesteps):
-            # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
-            # This would be a good case for the `match` statement (Python 3.10+)
+            # Note: Passing timesteps as Python scalars requires host-to-device transfer and CPU/GPU sync.
+            # Callers should pass timesteps as a torch.Tensor on the target device whenever possible.
             is_mps = sample.device.type == "mps"
-            if isinstance(timestep, float):
-                dtype = torch.float32 if is_mps else torch.float64
-            else:
-                dtype = torch.int32 if is_mps else torch.int64
+            match timesteps:
+                case float():
+                    dtype = torch.float32 if is_mps else torch.float64
+                case _:
+                    dtype = torch.int32 if is_mps else torch.int64
             timesteps = torch.tensor([timesteps], dtype=dtype, device=sample.device)
         elif len(timesteps.shape) == 0:
-            timesteps = timesteps[None].to(sample.device)
+            timesteps = timesteps[None]
+            if timesteps.device != sample.device:
+                timesteps = timesteps.to(sample.device)
+        elif timesteps.device != sample.device:
+            timesteps = timesteps.to(sample.device)
 
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         batch_size, num_frames = sample.shape[:2]
