@@ -327,9 +327,7 @@ def environment_info():
     return dict(python=platform.python_version(), platform=platform.platform(), packages=versions)
 
 
-def main(args):
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:8]
-    output_dir = Path(args.output_dir).expanduser().resolve()
+def _validate_run_logging(args, run_id, output_dir):
     check_directory(output_dir)
     log_path = Path(args.log_file).expanduser().resolve() if args.log_file else output_dir / f"{run_id}.log"
     protected = {Path(p).expanduser().resolve() for p in
@@ -340,6 +338,9 @@ def main(args):
     if log_path in protected:
         raise ValueError("Log path must differ from inputs, checkpoint, and outputs")
     setup_logging(log_path, args.log_level)
+
+
+def _prepare_tasks(args, run_id):
     if args.mode == 'replace' or args.transparent_background:
         from mimicmotion.utils.replacement import check_dependencies
         check_dependencies(args)
@@ -354,115 +355,140 @@ def main(args):
             task["error"] = f"Media validation: {exc}"
             if not args.continue_on_error:
                 raise ValueError(task["error"]) from exc
+    return tasks
 
-    pipeline = processor = torch = None
-    records = []
-    status = 0
-    summary = output_dir / f"{run_id}_summary.json"
-    env = environment_info()
+
+def _compute_model_info(args):
     checkpoint = Path(args.ckpt_path)
     digest = hashlib.sha256()
     with checkpoint.open("rb") as stream:
         for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
-    model_info = dict(base_model=args.base_model_path, checkpoint=str(checkpoint),
-                      checkpoint_bytes=checkpoint.stat().st_size, checkpoint_sha256=digest.hexdigest())
+    return dict(base_model=args.base_model_path, checkpoint=str(checkpoint),
+                checkpoint_bytes=checkpoint.stat().st_size, checkpoint_sha256=digest.hexdigest())
+
+
+def _load_pipeline_and_processor(args):
+    import torch
+    device, dtype = resolve_runtime(args, torch)
+    from mimicmotion.utils.geglu_patch import patch_geglu_inplace
+    patch_geglu_inplace()
+    from mimicmotion.utils.loader import create_pipeline
+    from mimicmotion.dwpose.dwpose_detector import DWposeDetector
+    started = time.perf_counter()
+    pipeline = create_pipeline(args, device, dtype=dtype)
+    logger.info("Model loaded in %.2fs; device=%s dtype=%s", time.perf_counter() - started, device, dtype)
+    processor = DWposeDetector("models/DWPose/yolox_l.onnx", "models/DWPose/dw-ll_ucoco_384.onnx", device=device)
+    return pipeline, processor, device, torch
+
+
+def _process_task(index, task, args, env, model_info, pipeline, processor, device, torch):
+    started = time.perf_counter()
+    stage = "validation"
+    record = dict(task=index + 1, video=str(task["video"]), image=str(task["image"]),
+                  output=str(task["output"]), parameters=vars(args).copy(), environment=env, model=model_info,
+                  media=task.get("media"), started_at=datetime.now(timezone.utc).isoformat())
+    frames = pose_pixels = image_pixels = None
+    replacement_work = None
+    replacement_geometry = None
+    code = 0
+    try:
+        if task["error"]:
+            raise ValueError(task["error"])
+        stage = "preprocess"
+        with torch.no_grad():
+            if args.mode == 'replace':
+                from mimicmotion.utils.replacement import prepare
+                replacement_work = Path(tempfile.mkdtemp(prefix='.replacement-', dir=task['output'].parent))
+                pose_pixels, image_pixels, replacement_geometry = prepare(task, args, processor, replacement_work)
+            else:
+                pose_pixels, image_pixels = preprocess(task["video"], task["image"], args.resolution,
+                                                      args.sample_stride, processor, args.num_frames)
+            processor.release_memory()
+            record["preprocess_seconds"] = time.perf_counter() - started
+            logger.info("Task %d pose extraction: %.2fs", index + 1, record["preprocess_seconds"])
+            stage = "inference"
+            inference_start = time.perf_counter()
+            frames = run_pipeline(pipeline, image_pixels, pose_pixels, device, args)
+            record["inference_seconds"] = time.perf_counter() - inference_start
+        record.update(status="success", output_frames=int(frames.shape[0]),
+                      generation_seconds=time.perf_counter() - started)
+        stage = "output"
+        if args.mode == 'replace' or args.transparent_background:
+            from mimicmotion.utils.replacement import render
+            if replacement_work is None:
+                replacement_work = Path(tempfile.mkdtemp(prefix='.transparent-', dir=task['output'].parent))
+            pipeline.to('cpu')
+            if getattr(device, 'type', None) == 'cuda':
+                with torch.cuda.device(device):
+                    torch.cuda.empty_cache()
+            fd, temp_name = tempfile.mkstemp(prefix='.replacement-', suffix=task['output'].suffix, dir=task['output'].parent)
+            os.close(fd)
+            temp_video = Path(temp_name)
+            try:
+                if args.transparent_background:
+                    from mimicmotion.utils.transparent import render_transparent
+                    record['transparency'] = render_transparent(
+                        frames, task, args, replacement_work, replacement_geometry, temp_video, processor)
+                else:
+                    record['replacement'] = render(frames, task, args, replacement_work, replacement_geometry, temp_video)
+                publish(temp_video, task['output'], args.overwrite)
+                write_json(task['output'].with_suffix('.json'), record, args.overwrite)
+            finally:
+                temp_video.unlink(missing_ok=True)
+        else:
+            save_result(frames, task["output"], args, record)
+        logger.info("Task %d saved: %s (%.2fs)", index + 1, task["output"], time.perf_counter() - started)
+    except Exception as exc:
+        oom = torch is not None and isinstance(exc, torch.cuda.OutOfMemoryError)
+        code = 4 if oom else (5 if stage == "output" else (2 if stage == "validation" or (stage == "preprocess" and isinstance(exc, ValueError)) else 3))
+        record.update(status="failed", stage=stage, error=str(exc), exit_code=code)
+        logger.exception("Task %d failed at %s%s", index + 1, stage,
+                         "; reduce resolution or decode_chunk_size" if oom else "")
+    finally:
+        record["total_seconds"] = time.perf_counter() - started
+        if replacement_work is not None:
+            if args.keep_intermediates:
+                record['intermediates'] = str(replacement_work)
+                logger.info('Review intermediates: %s', replacement_work)
+            else:
+                import shutil
+                shutil.rmtree(replacement_work)
+        frames = pose_pixels = image_pixels = None
+        if processor is not None:
+            processor.release_memory()
+        if pipeline is not None:
+            pipeline.to("cpu")
+        if torch is not None and args.device.startswith("cuda"):
+            with torch.cuda.device(device):
+                torch.cuda.empty_cache()
+    return record, code
+
+
+def main(args):
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    output_dir = Path(args.output_dir).expanduser().resolve()
+    _validate_run_logging(args, run_id, output_dir)
+    tasks = _prepare_tasks(args, run_id)
+
+    pipeline = processor = torch = device = None
+    records = []
+    status = 0
+    summary = output_dir / f"{run_id}_summary.json"
+    env = environment_info()
+    model_info = _compute_model_info(args)
+
     try:
         if any(not task["error"] for task in tasks):
-            import torch
-            device, dtype = resolve_runtime(args, torch)
-            from mimicmotion.utils.geglu_patch import patch_geglu_inplace
-            patch_geglu_inplace()
-            from mimicmotion.utils.loader import create_pipeline
-            from mimicmotion.dwpose.dwpose_detector import DWposeDetector
-            started = time.perf_counter()
-            pipeline = create_pipeline(args, device, dtype=dtype)
-            logger.info("Model loaded in %.2fs; device=%s dtype=%s", time.perf_counter() - started, device, dtype)
-            processor = DWposeDetector("models/DWPose/yolox_l.onnx", "models/DWPose/dw-ll_ucoco_384.onnx", device=device)
+            pipeline, processor, device, torch = _load_pipeline_and_processor(args)
+
         for index, task in enumerate(tasks):
-            started = time.perf_counter()
-            stage = "validation"
-            record = dict(task=index + 1, video=str(task["video"]), image=str(task["image"]),
-                          output=str(task["output"]), parameters=vars(args).copy(), environment=env, model=model_info,
-                          media=task.get("media"), started_at=datetime.now(timezone.utc).isoformat())
-            frames = pose_pixels = image_pixels = None
-            replacement_work = None
-            replacement_geometry = None
-            try:
-                if task["error"]:
-                    raise ValueError(task["error"])
-                stage = "preprocess"
-                with torch.no_grad():
-                    if args.mode == 'replace':
-                        from mimicmotion.utils.replacement import prepare
-                        replacement_work = Path(tempfile.mkdtemp(prefix='.replacement-',dir=task['output'].parent))
-                        pose_pixels, image_pixels, replacement_geometry = prepare(task,args,processor,replacement_work)
-                    else:
-                        pose_pixels, image_pixels = preprocess(task["video"], task["image"], args.resolution,
-                                                              args.sample_stride, processor, args.num_frames)
-                    processor.release_memory()
-                    record["preprocess_seconds"] = time.perf_counter() - started
-                    logger.info("Task %d pose extraction: %.2fs", index + 1, record["preprocess_seconds"])
-                    stage = "inference"
-                    inference_start = time.perf_counter()
-                    frames = run_pipeline(pipeline, image_pixels, pose_pixels, device, args)
-                    record["inference_seconds"] = time.perf_counter() - inference_start
-                record.update(status="success", output_frames=int(frames.shape[0]),
-                              generation_seconds=time.perf_counter() - started)
-                stage = "output"
-                if args.mode == 'replace' or args.transparent_background:
-                    from mimicmotion.utils.replacement import render
-                    if replacement_work is None:
-                        replacement_work = Path(tempfile.mkdtemp(prefix='.transparent-', dir=task['output'].parent))
-                    pipeline.to('cpu')
-                    if device.type == 'cuda':
-                        with torch.cuda.device(device):
-                            torch.cuda.empty_cache()
-                    fd, temp_name = tempfile.mkstemp(prefix='.replacement-',suffix=task['output'].suffix,dir=task['output'].parent)
-                    os.close(fd)
-                    temp_video = Path(temp_name)
-                    try:
-                        if args.transparent_background:
-                            from mimicmotion.utils.transparent import render_transparent
-                            record['transparency'] = render_transparent(
-                                frames,task,args,replacement_work,replacement_geometry,temp_video,processor)
-                        else:
-                            record['replacement'] = render(frames,task,args,replacement_work,replacement_geometry,temp_video)
-                        publish(temp_video,task['output'],args.overwrite)
-                        write_json(task['output'].with_suffix('.json'),record,args.overwrite)
-                    finally:
-                        temp_video.unlink(missing_ok=True)
-                else:
-                    save_result(frames, task["output"], args, record)
-                logger.info("Task %d saved: %s (%.2fs)", index + 1, task["output"], time.perf_counter() - started)
-            except Exception as exc:
-                oom = torch is not None and isinstance(exc, torch.cuda.OutOfMemoryError)
-                code = 4 if oom else (5 if stage == "output" else (2 if stage == "validation" or (stage == "preprocess" and isinstance(exc, ValueError)) else 3))
-                status = status or code
-                record.update(status="failed", stage=stage, error=str(exc), exit_code=code)
-                logger.exception("Task %d failed at %s%s", index + 1, stage,
-                                 "; reduce resolution or decode_chunk_size" if oom else "")
-                if not args.continue_on_error:
-                    records.append(record)
-                    break
-            finally:
-                record["total_seconds"] = time.perf_counter() - started
-                if replacement_work is not None:
-                    if args.keep_intermediates:
-                        record['intermediates'] = str(replacement_work)
-                        logger.info('Review intermediates: %s',replacement_work)
-                    else:
-                        import shutil
-                        shutil.rmtree(replacement_work)
-                frames = pose_pixels = image_pixels = None
-                if processor is not None:
-                    processor.release_memory()
-                if pipeline is not None:
-                    pipeline.to("cpu")
-                if torch is not None and args.device.startswith("cuda"):
-                    with torch.cuda.device(device):
-                        torch.cuda.empty_cache()
+            record, code = _process_task(index, task, args, env, model_info, pipeline, processor, device, torch)
             records.append(record)
+            if code != 0:
+                status = status or code
+                if not args.continue_on_error:
+                    break
     except KeyboardInterrupt:
         status = 130
         raise
