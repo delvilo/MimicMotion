@@ -41,7 +41,7 @@ def download_url(url, destination, recorded):
 
 def download_models(project):
     from huggingface_hub import HfApi, hf_hub_download, snapshot_download
-    from huggingface_hub.utils import GatedRepoError, HfHubHTTPError
+    from huggingface_hub.utils import HfHubHTTPError
     models=project/'models'; models.mkdir(exist_ok=True)
     manifest=models/'install-manifest.json'
     recorded=json.loads(manifest.read_text()).get('files',{}) if manifest.exists() else {}
