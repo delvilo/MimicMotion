@@ -509,6 +509,7 @@ class MimicMotionPipeline(DiffusionPipeline):
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, None)
+        timesteps = timesteps.to(device=device)
 
         # 5. Prepare latent variables
         num_channels_latents = self.unet.config.in_channels
