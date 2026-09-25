@@ -37,6 +37,44 @@ class TransparentTests(unittest.TestCase):
     def args(self, *extra):
         return parse_args(['--ref_video_path', 'dance.mp4', '--ref_image_path', 'actor.png', *extra])
 
+    def test_subprocess_cmd_args(self):
+        from mimicmotion.utils.replacement import render
+        frames = Frames(np.zeros((1, 3, 32, 48), np.uint8))
+        g = dict(width=48, height=32, resized_width=48, resized_height=32, x=0, y=0)
+        task = dict(video='test_video.mp4', media=dict(source_stream=dict(avg_frame_rate=30)))
+        args = self.args('--mode', 'replace', '--mute')
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / 'prompts.json').write_text(json.dumps(dict(blockers=[[]])))
+            mock_bg = MagicMock()
+            mock_bg.fill.return_value = (np.zeros((32, 48, 3), np.uint8), np.zeros((32, 48), bool), [])
+            with patch('mimicmotion.utils.replacement.segment', return_value=(temp, temp)), \
+                 patch('mimicmotion.utils.replacement.mask_paths', return_value=[directory / '0.png']), \
+                 patch('mimicmotion.utils.replacement.SourceBackground', return_value=mock_bg), \
+                 patch('mimicmotion.utils.replacement.LamaFill'), \
+                 patch('subprocess.Popen') as mock_popen:
+                mock_proc = MagicMock()
+                mock_proc.wait.return_value = 0
+                mock_proc.stdin = MagicMock()
+                mock_proc.stdin.closed = False
+                mock_popen.return_value = mock_proc
+                with patch('mimicmotion.utils.replacement.read_mask', return_value=np.ones((32, 48), np.uint8) * 255), \
+                     patch('mimicmotion.utils.replacement.restore_frame', return_value=np.zeros((32, 48, 3), np.uint8)), \
+                     patch.dict('sys.modules', {'decord': MagicMock()}):
+                    import sys
+                    mock_decord = sys.modules['decord']
+                    mock_decord.VideoReader.return_value.__len__.return_value = 1
+                    mock_decord.VideoReader.return_value.__getitem__.return_value.asnumpy.return_value = np.zeros((32, 48, 3), np.uint8)
+                    render(frames, task, args, directory, g, directory / 'out.mp4')
+
+                self.assertTrue(mock_popen.called)
+                cmd = mock_popen.call_args[0][0]
+                kwargs = mock_popen.call_args[1]
+                self.assertFalse(kwargs.get('shell', False))
+                self.assertTrue(all(isinstance(item, str) for item in cmd))
+                self.assertIn('30', cmd)
+                self.assertIn('test_video.mp4', cmd)
+
     def test_cli(self):
         self.assertFalse(self.args().transparent_background)
         args = self.args('--transparent_background', '--output_file', 'actor.mov')
