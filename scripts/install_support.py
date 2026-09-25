@@ -97,7 +97,6 @@ def check_environment(project, skip_gpu):
     import onnxruntime as ort
     import av
     from mimicmotion.utils.loader import create_pipeline
-    from mimicmotion.utils.replacement import render
     if not skip_gpu:
         if not torch.cuda.is_available():
             raise RuntimeError('PyTorch cannot use CUDA. Check NVIDIA driver and GPU visibility.')
