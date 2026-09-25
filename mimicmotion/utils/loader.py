@@ -1,7 +1,6 @@
 import logging
 
 import torch
-import torch.utils.checkpoint
 from diffusers.models import AutoencoderKLTemporalDecoder
 from diffusers.schedulers import EulerDiscreteScheduler
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
