@@ -255,8 +255,7 @@ class TransformerSpatioTemporalModel(nn.Module):
 
         # 4. Define output layers
         self.out_channels = in_channels if out_channels is None else out_channels
-        # TODO: should use out_channels for continuous projections
-        self.proj_out = nn.Linear(inner_dim, in_channels)
+        self.proj_out = nn.Linear(inner_dim, self.out_channels)
 
         self.gradient_checkpointing = False
 
