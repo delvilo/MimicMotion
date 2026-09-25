@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Union
 
 import PIL.Image
-import einops
 import numpy as np
 import torch
 from diffusers.image_processor import VaeImageProcessor, PipelineImageInput
