@@ -350,7 +350,7 @@ def render(frames, task, args, directory, g, temp_output):
     lama = LamaFill(args.lama_checkpoint,args.device)
     info = task['media']['source_stream']; fps = info['avg_frame_rate']
     cmd = ['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f"{g['width']}x{g['height']}",
-           '-framerate',fps,'-i','pipe:0','-i',task['video'],'-map','0:v:0']
+           '-framerate',str(fps),'-i','pipe:0','-i',str(task['video']),'-map','0:v:0']
     if not args.mute:
         cmd += ['-map','1:a:0?','-c:a','copy']
     cmd += ['-c:v','libx264rgb','-crf','0','-preset','medium','-pix_fmt','rgb24','-movflags','+faststart',str(temp_output)]
@@ -359,7 +359,7 @@ def render(frames, task, args, directory, g, temp_output):
         provenance.mkdir()
     error_path = directory/'ffmpeg.log'
     with error_path.open('wb') as err:
-        proc = subprocess.Popen(cmd,stdin=subprocess.PIPE,stderr=err)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=err, shell=False)
         try:
             for i, frame in enumerate(frames):
                 source = reader[i].asnumpy(); shape = source.shape[:2]
