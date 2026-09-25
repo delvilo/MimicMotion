@@ -6,7 +6,6 @@ import math
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
 import numpy as np
 from PIL import Image, ImageFilter
