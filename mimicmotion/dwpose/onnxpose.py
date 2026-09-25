@@ -24,12 +24,8 @@ def preprocess(
     out_img, out_center, out_scale = [], [], []
     if len(out_bbox) == 0:
         out_bbox = [[0, 0, img_shape[1], img_shape[0]]]
-    for i in range(len(out_bbox)):
-        x0 = out_bbox[i][0]
-        y0 = out_bbox[i][1]
-        x1 = out_bbox[i][2]
-        y1 = out_bbox[i][3]
-        bbox = np.array([x0, y0, x1, y1])
+    for bbox_item in out_bbox:
+        bbox = np.array(bbox_item[:4])
 
         # get center and scale
         center, scale = bbox_xyxy2cs(bbox, padding=1.25)
