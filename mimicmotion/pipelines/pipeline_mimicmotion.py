@@ -540,6 +540,18 @@ class MimicMotionPipeline(DiffusionPipeline):
             with torch.cuda.device(device):
                 torch.cuda.empty_cache()
 
+        # Performance optimization: Precompute tile weighting and accumulated tile normalization counts
+        # outside the denoising timesteps loop to avoid repeated tensor allocations, 4D reshaping, and
+        # loop accumulation in every inference step.
+        weight = (torch.arange(tile_size, device=device, dtype=image_latents.dtype) + 0.5) * 2. / tile_size
+        weight = torch.minimum(weight, 2 - weight)
+        weight_4d = weight[:, None, None, None]
+
+        noise_pred_cnt = image_latents.new_zeros((num_frames,))
+        for idx in indices:
+            noise_pred_cnt[idx] += weight
+        noise_pred_cnt_4d = noise_pred_cnt[:, None, None, None]
+
         with self.progress_bar(total=len(timesteps) * len(indices)) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
@@ -551,9 +563,6 @@ class MimicMotionPipeline(DiffusionPipeline):
 
                 # predict the noise residual
                 noise_pred = torch.zeros_like(image_latents)
-                noise_pred_cnt = image_latents.new_zeros((num_frames,))
-                weight = (torch.arange(tile_size, device=device) + 0.5) * 2. / tile_size
-                weight = torch.minimum(weight, 2 - weight)
                 for idx in indices:
 
                     # classification-free inference
@@ -567,7 +576,7 @@ class MimicMotionPipeline(DiffusionPipeline):
                         image_only_indicator=image_only_indicator,
                         return_dict=False,
                     )[0]
-                    noise_pred[:1, idx] += _noise_pred * weight[:, None, None, None]
+                    noise_pred[:1, idx] += _noise_pred * weight_4d
 
                     # normal inference
                     _noise_pred = self.unet(
@@ -579,11 +588,10 @@ class MimicMotionPipeline(DiffusionPipeline):
                         image_only_indicator=image_only_indicator,
                         return_dict=False,
                     )[0]
-                    noise_pred[1:, idx] += _noise_pred * weight[:, None, None, None]
+                    noise_pred[1:, idx] += _noise_pred * weight_4d
 
-                    noise_pred_cnt[idx] += weight
                     progress_bar.update()
-                noise_pred.div_(noise_pred_cnt[:, None, None, None])
+                noise_pred.div_(noise_pred_cnt_4d)
 
                 # perform guidance
                 if self.do_classifier_free_guidance:

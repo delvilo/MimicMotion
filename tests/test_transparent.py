@@ -110,6 +110,7 @@ class TransparentTests(unittest.TestCase):
                     self.assertEqual(info['avg_frame_rate'], '30000/1001')
                     self.assertIn(info['pix_fmt'], ('argb', 'yuva444p12le'))
 
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg required')
     def test_reviewed_masks_bypass_background_and_sam(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)

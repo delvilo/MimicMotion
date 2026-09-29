@@ -23,11 +23,6 @@ if 'transformers' not in sys.modules:
     mock_transformers = MagicMock()
     sys.modules['transformers'] = mock_transformers
 
-# Mock internal modules that might import torch
-sys.modules['mimicmotion.modules.unet'] = MagicMock()
-sys.modules['mimicmotion.modules.pose_net'] = MagicMock()
-sys.modules['mimicmotion.pipelines.pipeline_mimicmotion'] = MagicMock()
-
 import mimicmotion.utils.loader as loader_module
 
 
