@@ -1,3 +1,5 @@
+import functools
+
 import cv2
 import numpy as np
 
@@ -73,7 +75,9 @@ def multiclass_nms(boxes, scores, nms_thr, score_thr):
         return None
     return np.concatenate(final_dets, 0)
 
-def demo_postprocess(outputs, img_size, p6=False):
+@functools.lru_cache(maxsize=16)
+def _get_grid_and_strides(img_size, p6=False):
+    """Precompute grid and stride arrays for bounding box post-processing."""
     grids = []
     expanded_strides = []
     strides = [8, 16, 32] if not p6 else [8, 16, 32, 64]
@@ -90,6 +94,13 @@ def demo_postprocess(outputs, img_size, p6=False):
 
     grids = np.concatenate(grids, 1)
     expanded_strides = np.concatenate(expanded_strides, 1)
+    return grids, expanded_strides
+
+
+def demo_postprocess(outputs, img_size, p6=False):
+    # Performance optimization: Precompute and cache meshgrid/strides for detector output decoding,
+    # avoiding repeated array creation and concatenation across hundreds of video frames.
+    grids, expanded_strides = _get_grid_and_strides(tuple(img_size), p6)
     outputs[..., :2] = (outputs[..., :2] + grids) * expanded_strides
     outputs[..., 2:4] = np.exp(outputs[..., 2:4]) * expanded_strides
 
