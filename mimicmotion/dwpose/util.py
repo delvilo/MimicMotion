@@ -6,6 +6,18 @@ import cv2
 
 eps = 0.01
 
+LIMB_SEQ = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10],
+            [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17],
+            [1, 16], [16, 18], [3, 17], [6, 18]]
+# Precompute 0-indexed limb indices for body pose drawing to avoid repeated array conversions inside loops
+LIMB_INDICES_0IDX = [np.array(limb) - 1 for limb in LIMB_SEQ]
+
+HAND_EDGES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [0, 9], [9, 10],
+              [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16], [0, 17], [17, 18], [18, 19], [19, 20]]
+# Precompute HSV-to-RGB color array for hand pose edges to avoid repeated color conversions in inner loops
+HAND_EDGE_COLORS = [matplotlib.colors.hsv_to_rgb([ie / float(len(HAND_EDGES)), 1.0, 1.0]) for ie in range(len(HAND_EDGES))]
+
+
 def alpha_blend_color(color, alpha):
     """blend color according to point conf
     """
@@ -18,22 +30,21 @@ def draw_bodypose(canvas, candidate, subset, score):
 
     stickwidth = 4
 
-    limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], \
-               [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], \
-               [1, 16], [16, 18], [3, 17], [6, 18]]
-
     colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], \
               [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], \
               [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
 
+    # Performance optimization: use precomputed 0-indexed limb indices
     for i in range(17):
+        limb_idx = LIMB_INDICES_0IDX[i]
         for n in range(len(subset)):
-            index = subset[n][np.array(limbSeq[i]) - 1]
-            conf = score[n][np.array(limbSeq[i]) - 1]
+            index = subset[n][limb_idx]
+            conf = score[n][limb_idx]
             if conf[0] < 0.3 or conf[1] < 0.3:
                 continue
-            Y = candidate[index.astype(int), 0] * float(W)
-            X = candidate[index.astype(int), 1] * float(H)
+            idx_int = index.astype(int)
+            Y = candidate[idx_int, 0] * float(W)
+            X = candidate[idx_int, 1] * float(H)
             mX = np.mean(X)
             mY = np.mean(Y)
             length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
@@ -59,12 +70,10 @@ def draw_bodypose(canvas, candidate, subset, score):
 def draw_handpose(canvas, all_hand_peaks, all_hand_scores):
     H, W, C = canvas.shape
 
-    edges = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [0, 9], [9, 10], \
-             [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16], [0, 17], [17, 18], [18, 19], [19, 20]]
-
+    # Performance optimization: use precomputed edge colors and edges
     for peaks, scores in zip(all_hand_peaks, all_hand_scores):
 
-        for ie, e in enumerate(edges):
+        for ie, e in enumerate(HAND_EDGES):
             x1, y1 = peaks[e[0]]
             x2, y2 = peaks[e[1]]
             x1 = int(x1 * W)
@@ -74,7 +83,7 @@ def draw_handpose(canvas, all_hand_peaks, all_hand_scores):
             score = int(scores[e[0]] * scores[e[1]] * 255)
             if x1 > eps and y1 > eps and x2 > eps and y2 > eps:
                 cv2.line(canvas, (x1, y1), (x2, y2), 
-                         matplotlib.colors.hsv_to_rgb([ie / float(len(edges)), 1.0, 1.0]) * score, thickness=2)
+                         HAND_EDGE_COLORS[ie] * score, thickness=2)
 
         for i, keyponit in enumerate(peaks):
             x, y = keyponit
