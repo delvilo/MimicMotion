@@ -552,6 +552,11 @@ class MimicMotionPipeline(DiffusionPipeline):
             noise_pred_cnt[idx] += weight
         noise_pred_cnt_4d = noise_pred_cnt[:, None, None, None]
 
+        # Performance optimization: Precompute pose latents for all frames outside the timesteps loop.
+        # Since image_pose and pose_net remain invariant across denoising timesteps, running pose_net
+        # once for all frames eliminates num_timesteps * num_tiles repeated forward passes and host-to-device transfers.
+        pose_latents_all = self.pose_net(image_pose.to(device))
+
         with self.progress_bar(total=len(timesteps) * len(indices)) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
@@ -566,7 +571,7 @@ class MimicMotionPipeline(DiffusionPipeline):
                 for idx in indices:
 
                     # classification-free inference
-                    pose_latents = self.pose_net(image_pose[idx].to(device))
+                    pose_latents = pose_latents_all[idx]
                     _noise_pred = self.unet(
                         latent_model_input[:1, idx],
                         t,
