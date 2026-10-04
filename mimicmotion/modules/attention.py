@@ -292,14 +292,11 @@ class TransformerSpatioTemporalModel(nn.Module):
         num_frames = image_only_indicator.shape[-1]
         batch_size = batch_frames // num_frames
 
-        time_context = encoder_hidden_states
-        time_context_first_timestep = time_context[None, :].reshape(
-            batch_size, num_frames, -1, time_context.shape[-1]
-        )[:, 0]
-        time_context = time_context_first_timestep[None, :].broadcast_to(
-            height * width, batch_size, 1, time_context.shape[-1]
-        )
-        time_context = time_context.reshape(height * width * batch_size, 1, time_context.shape[-1])
+        # Performance optimization: extract first timestep embedding per batch and repeat across spatial tokens
+        # directly, avoiding intermediate 5D allocations and redundant broadcast_to + reshape ops.
+        seq_len, dim = encoder_hidden_states.shape[-2:]
+        time_context_first = encoder_hidden_states.reshape(batch_size, num_frames, seq_len, dim)[:, 0]
+        time_context = time_context_first.repeat(height * width, 1, 1)
 
         residual = hidden_states
 
