@@ -55,20 +55,25 @@ def inference(sess: ort.InferenceSession, img: np.ndarray) -> np.ndarray:
     Returns:
         outputs (np.ndarray): Output of RTMPose model.
     """
-    all_out = []
-    # build input
-    for sub_img in img:
-        input = [sub_img.transpose(2, 0, 1)]
+    if img is None or len(img) == 0:
+        return []
 
-        # build output
-        sess_input = {sess.get_inputs()[0].name: input}
-        sess_output = []
-        for out in sess.get_outputs():
-            sess_output.append(out.name)
+    # Bolt Optimization: Batch ONNX runtime inference across all images
+    # instead of calling `sess.run()` per image in a python loop.
+    batched_input = np.stack([sub_img.transpose(2, 0, 1) for sub_img in img], axis=0)
 
-        # run model
-        outputs = sess.run(sess_output, sess_input)
-        all_out.append(outputs)
+    sess_input = {sess.get_inputs()[0].name: batched_input}
+    sess_output = [out.name for out in sess.get_outputs()]
+
+    # Run model once for the entire batch
+    outputs = sess.run(sess_output, sess_input)
+
+    # Slice output back into per-sample results preserving expected [1, K, W] shape
+    num_samples = len(img)
+    all_out = [
+        [out[i : i + 1] for out in outputs]
+        for i in range(num_samples)
+    ]
 
     return all_out
 
