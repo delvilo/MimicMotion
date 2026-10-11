@@ -90,8 +90,7 @@ def check_environment(project, skip_gpu):
     print("Selected runtime:",verify_installed())
     import numpy
     import torch
-    import torchvision
-    import decord
+    import torchcodec
     import onnxruntime as ort
     from mimicmotion.utils.loader import create_pipeline
     if not skip_gpu:
@@ -104,7 +103,7 @@ def check_environment(project, skip_gpu):
         if 'CUDAExecutionProvider' not in ort.get_available_providers():
             raise RuntimeError('ONNX Runtime has no CUDAExecutionProvider')
         print('CUDA FP16 convolution passed:',torch.cuda.get_device_name(0))
-    print('Main imports passed:',torch.__version__,torchvision.__version__,ort.__version__)
+    print('Main imports passed:',torch.__version__,torchcodec.__version__,ort.__version__)
 
 
 def check_models(project, skip_gpu):

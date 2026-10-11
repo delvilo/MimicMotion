@@ -28,14 +28,13 @@ def preprocess(video_path, image_path, resolution=576, sample_stride=2, processo
     """
     import numpy as np
     import torch
-    from torchvision.datasets.folder import pil_loader
-    from torchvision.transforms.functional import pil_to_tensor, resize, center_crop
+    from PIL import Image
     from constants import ASPECT_RATIO
     from mimicmotion.dwpose.preprocess import get_video_pose, get_image_pose
 
-    image_pixels = pil_loader(image_path)
-    image_pixels = pil_to_tensor(image_pixels) # (c, h, w)
-    h, w = image_pixels.shape[-2:]
+    with Image.open(image_path) as img:
+        img_rgb = img.convert("RGB")
+    w, h = img_rgb.size
     ############################ compute target h/w according to original aspect ratio ###############################
     if h>w:
         w_target, h_target = resolution, int(resolution / ASPECT_RATIO // 64) * 64
@@ -46,9 +45,12 @@ def preprocess(video_path, image_path, resolution=576, sample_stride=2, processo
         h_resize, w_resize = h_target, math.ceil(h_target / h_w_ratio)
     else:
         h_resize, w_resize = math.ceil(w_target * h_w_ratio), w_target
-    image_pixels = resize(image_pixels, [h_resize, w_resize], antialias=None)
-    image_pixels = center_crop(image_pixels, [h_target, w_target])
-    image_pixels = image_pixels.permute((1, 2, 0)).numpy()
+
+    img_resized = img_rgb.resize((w_resize, h_resize), Image.Resampling.BILINEAR)
+    left = (w_resize - w_target) // 2
+    top = (h_resize - h_target) // 2
+    img_cropped = img_resized.crop((left, top, left + w_target, top + h_target))
+    image_pixels = np.array(img_cropped)
     ##################################### get image&video pose value #################################################
     image_pose = get_image_pose(image_pixels, processor=processor)
     video_pose = get_video_pose(video_path, image_pixels, sample_stride=sample_stride, processor=processor, min_frames=min_frames)
@@ -58,10 +60,10 @@ def preprocess(video_path, image_path, resolution=576, sample_stride=2, processo
 
 def run_pipeline(pipeline, image_pixels, pose_pixels, device, task_config):
     import torch
-    from torchvision.transforms.functional import to_pil_image
+    from PIL import Image
 
     pose_pixels = pose_pixels.to(dtype=next(pipeline.pose_net.parameters()).dtype)
-    image_pixels = [to_pil_image(img.to(torch.uint8)) for img in (image_pixels + 1.0) * 127.5]
+    image_pixels = [Image.fromarray(img.permute(1, 2, 0).to(torch.uint8).cpu().numpy()) for img in (image_pixels + 1.0) * 127.5]
     generator = torch.Generator(device=device)
     generator.manual_seed(task_config.seed)
     frames = pipeline(
@@ -247,10 +249,10 @@ def resolve_runtime(args, torch):
 
 def probe_media(task, args):
     from PIL import Image
-    import decord
+    from mimicmotion.utils.video_codec import TorchVideoReader
     with Image.open(task["image"]) as image:
         image.verify()
-    reader = decord.VideoReader(task["video"], ctx=decord.cpu(0))
+    reader = TorchVideoReader(task["video"], ctx="cpu")
     source_fps = float(reader.get_avg_fps())
     if len(reader) == 0 or not math.isfinite(source_fps) or source_fps <= 0:
         raise ValueError("Video has no frames or valid frame rate")
@@ -319,7 +321,7 @@ def save_result(frames, output, args, record):
 
 def environment_info():
     versions = {}
-    for package in ("torch", "torchvision", "diffusers", "transformers", "numpy", "decord", "onnxruntime", "onnxruntime-gpu"):
+    for package in ("torch", "torchcodec", "diffusers", "transformers", "numpy", "onnxruntime", "onnxruntime-gpu"):
         try:
             versions[package] = metadata.version(package)
         except metadata.PackageNotFoundError:

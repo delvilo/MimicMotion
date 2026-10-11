@@ -1,7 +1,7 @@
 from tqdm import tqdm
-import decord
 import numpy as np
 
+from ..utils.video_codec import TorchVideoReader
 from .util import draw_pose
 from .dwpose_detector import dwpose_detector as dwprocessor
 
@@ -35,7 +35,7 @@ def _get_video_pose(
     height, width, _ = ref_image.shape
 
     # read input video
-    vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
+    vr = TorchVideoReader(video_path, ctx="cpu")
     source_fps = float(vr.get_avg_fps())
     if len(vr) == 0 or not np.isfinite(source_fps) or source_fps <= 0:
         raise ValueError("Video is empty or has an invalid frame rate")

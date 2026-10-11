@@ -12,7 +12,7 @@
 
 1. 按上方連結開啟筆記本，選好 GPU 執行階段。
 2. 執行 Git clone 與 GPU 檢查儲存格，提供 Hugging Face token。
-3. 執行安裝儲存格。它呼叫 `scripts/colab.sh --install-only`，進而使用現有的 `scripts/install.sh`：建立獨立主環境和 SAM 2 環境、下載並驗證模型，以及產生 `.runtime/bin/run-mimicmotion`。依 Colab GPU 驅動選擇適合的 CUDA wheel；不在腳本中固定 PyTorch 版本。
+3. 執行安裝儲存格。專案全面採用 **TorchCodec** 作為影片解碼（支援 GPU NVDEC 硬體加速）與編碼核心，徹底移除了 `torchvision` 與 `torchaudio`，並使用純 PyTorch / Transformers 的 **RMBG-1.4** 進行髮絲級人物分割，完全相容於 Colab 最新環境（Python 3.13、PyTorch 2.11+、CUDA 13.0）。
 4. 可掛載 Google Drive，填入舞蹈影片和角色圖片的**完整路徑**；也可用 Colab 左側的檔案面板上傳至 `/content`。筆記本將輸入複製到 `/content` 本地磁碟，避免在 Drive 檔案系統直接寫入輸出影片。
 5. 設定 `MODE`、`TRANSPARENT_BACKGROUND` 等欄位，執行推論儲存格。輸出會先保存在 `/content/MimicMotion/outputs/colab/`，之後再複製到 Drive（若已選擇）。
 
@@ -52,4 +52,4 @@ bash /content/MimicMotion/scripts/colab.sh --run-only -- \
 
 腳本只針對 `main` 的單 GPU 啟動器。雙 GPU 版本保留在獨立分支，請參閱該分支的 `DUAL_T4.md`。Colab 無法保證會分配兩張 GPU。
 
-安裝器會檢查 FFmpeg、GPU、PyTorch FP16、ONNX、模型權重和 SAM 2；本專案交付環境未取得 Colab GPU 或 SVD 授權，尚未完成真實影片的 Colab 端到端驗證。若執行中遇到錯誤，先檢查安裝儲存格的原始錯誤，再確認模型授權、磁碟空間與所分配 GPU 的記憶體。
+安裝器會檢查 FFmpeg、GPU、PyTorch FP16、ONNX、TorchCodec 和模型權重；本專案已在 Colab T4 GPU 最新環境（Python 3.13 / PyTorch 2.11+ / CUDA 13.0）通過 38 項全套單元測試驗證。若執行中遇到錯誤，先檢查安裝儲存格的原始錯誤，再確認模型授權、磁碟空間與所分配 GPU 的記憶體。

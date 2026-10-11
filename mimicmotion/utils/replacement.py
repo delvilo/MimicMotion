@@ -8,7 +8,10 @@ import shutil
 import subprocess
 
 import numpy as np
+import torch
 from PIL import Image, ImageFilter
+
+from mimicmotion.utils.video_codec import TorchVideoReader
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +30,9 @@ def check_dependencies(args):
     if not transparent and not args.no_ai_background and not Path(args.lama_checkpoint).is_file():
         raise ValueError(f'LaMa checkpoint missing: {args.lama_checkpoint}; supply it or use --no_ai_background')
     if not (args.replacement_masks and (transparent or args.source_masks)):
-        if not Path(args.sam2_checkpoint).is_file():
-            raise ValueError(f'SAM 2 checkpoint missing: {args.sam2_checkpoint}')
-        worker = Path(__file__).resolve().parents[2] / 'scripts' / 'replacement_masks.py'
-        result = subprocess.run([args.sam2_python, str(worker), '--check'], capture_output=True, text=True)
-        if result.returncode:
-            raise ValueError(f'SAM 2 environment unavailable: {result.stderr[-2000:]}')
+        seg_model = getattr(args, 'segmentation_model', 'briaai/RMBG-1.4')
+        if not seg_model:
+            raise ValueError('A segmentation model must be specified via --segmentation_model or provide --replacement_masks')
     if not transparent:
         import cv2  # ORB camera registration, already used by DWPose.
 
@@ -141,12 +141,11 @@ def geometry(width, height, resolution):
 
 
 def prepare(task, args, processor, directory):
-    import decord
     import torch
     from mimicmotion.dwpose.util import draw_pose
     from mimicmotion.dwpose.preprocess import get_image_pose
     from PIL import ImageOps
-    reader = decord.VideoReader(task['video'], ctx=decord.cpu(0))
+    reader = TorchVideoReader(task['video'], ctx="cpu")
     first = reader[0].asnumpy(); h, w = first.shape[:2]
     g = geometry(w, h, args.resolution)
     source_dir = directory / 'source'; source_dir.mkdir()
@@ -182,7 +181,7 @@ def restore_frame(frame, g):
 
 
 def segment(frames, args, directory, g, generated_only=False):
-    generated = directory/'generated'; generated.mkdir()
+    generated = directory/'generated'; generated.mkdir(exist_ok=True)
     for i, frame in enumerate(frames):
         rgb = restore_frame(frame.permute(1,2,0).numpy(), g)
         Image.fromarray(rgb).save(generated/f'{i:06d}.jpg', quality=95)
@@ -193,19 +192,14 @@ def segment(frames, args, directory, g, generated_only=False):
         if override:
             mask_paths(override,len(frames))
         else:
-            jobs.append(dict(images=str(directory/kind), masks=str(directory/(kind+'_masks'))))
+            jobs.append(dict(images=directory/kind, masks=directory/(kind+'_masks')))
     if jobs:
-        job_file = directory/'segmentation.json'
-        job_file.write_text(json.dumps(dict(jobs=jobs, prompts=str(directory/'prompts.json'))))
-        worker = Path(__file__).resolve().parents[2]/'scripts'/'replacement_masks.py'
-        log_path = directory/'sam2.log'
-        with log_path.open('w') as log:
-            result = subprocess.run([args.sam2_python,str(worker),'--jobs',str(job_file),
-                                     '--checkpoint',str(Path(args.sam2_checkpoint).resolve()),
-                                     '--model_config',args.sam2_model_config,'--device',args.device],
-                                    stdout=log,stderr=subprocess.STDOUT)
-        if result.returncode:
-            raise RuntimeError('SAM 2 failed: '+log_path.read_text()[-3000:])
+        from mimicmotion.utils.segmenter import VideoSegmenter
+        model_name = getattr(args, 'segmentation_model', 'briaai/RMBG-1.4')
+        device = getattr(args, 'device', 'cuda:0' if torch.cuda.is_available() else 'cpu')
+        segmenter = VideoSegmenter(model_name_or_path=model_name, device=device)
+        for job in jobs:
+            segmenter.segment_directory(job['images'], job['masks'])
 
     return (args.source_masks or directory/'source_masks',
             args.replacement_masks or directory/'generated_masks')
@@ -336,8 +330,7 @@ def composite(source, foreground, old_mask, alpha, background, protected=None):
 
 
 def render(frames, task, args, directory, g, temp_output):
-    import decord
-    reader = decord.VideoReader(task['video'],ctx=decord.cpu(0))
+    reader = TorchVideoReader(task['video'], ctx="cpu")
     if len(reader) != len(frames):
         raise ValueError('Generated/source frame counts differ; refusing to change timing')
     source_dir, generated_dir = segment(frames,args,directory,g)

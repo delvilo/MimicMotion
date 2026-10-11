@@ -107,5 +107,5 @@ def render_transparent(frames, task, args, directory, g, output, processor):
     return dict(transparent_background=True, alpha='straight', alpha_codec=args.alpha_codec,
                 container='mov', frames=count, fps=fps, resolution=[g['width'], g['height']],
                 background_strategy='none', ai_background_pixels=0,
-                masks='reviewed' if args.replacement_masks else 'SAM 2',
+                masks='reviewed' if args.replacement_masks else getattr(args, 'segmentation_model', 'RMBG-1.4'),
                 audio='first source audio stream as PCM if present' if audio else 'omitted')

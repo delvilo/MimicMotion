@@ -60,11 +60,11 @@ class TransparentTests(unittest.TestCase):
                 mock_popen.return_value = mock_proc
                 with patch('mimicmotion.utils.replacement.read_mask', return_value=np.ones((32, 48), np.uint8) * 255), \
                      patch('mimicmotion.utils.replacement.restore_frame', return_value=np.zeros((32, 48, 3), np.uint8)), \
-                     patch.dict('sys.modules', {'decord': MagicMock()}):
-                    import sys
-                    mock_decord = sys.modules['decord']
-                    mock_decord.VideoReader.return_value.__len__.return_value = 1
-                    mock_decord.VideoReader.return_value.__getitem__.return_value.asnumpy.return_value = np.zeros((32, 48, 3), np.uint8)
+                     patch('mimicmotion.utils.replacement.TorchVideoReader') as mock_reader_cls:
+                    mock_reader = MagicMock()
+                    mock_reader.__len__.return_value = 1
+                    mock_reader.__getitem__.return_value.asnumpy.return_value = np.zeros((32, 48, 3), np.uint8)
+                    mock_reader_cls.return_value = mock_reader
                     render(frames, task, args, directory, g, directory / 'out.mp4')
 
                 self.assertTrue(mock_popen.called)
@@ -187,20 +187,20 @@ class TransparentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             args = self.args('--transparent_background'); args.device = 'cuda:0'
-            # Only the dual branch exposes aux_device.
             expected_device = 'cuda:0'
             if hasattr(args,'aux_device'):
                 args.aux_device = 'cuda:1'; expected_device = 'cuda:1'
             frames = Frames(np.zeros((1,3,32,48),np.uint8))
             g = dict(width=48,height=32,resized_width=48,resized_height=32,x=0,y=0)
-            with patch('mimicmotion.utils.replacement.subprocess.run',
-                       return_value=SimpleNamespace(returncode=0)) as run:
-                segment(frames,args,directory,g,generated_only=True)
-            payload = json.loads((directory/'segmentation.json').read_text())
-            self.assertEqual(len(payload['jobs']),1)
-            self.assertEqual(Path(payload['jobs'][0]['images']).name,'generated')
-            cmd = run.call_args.args[0]
-            self.assertEqual(cmd[cmd.index('--device')+1],expected_device)
+            with patch('mimicmotion.utils.segmenter.VideoSegmenter') as mock_seg_cls:
+                mock_seg = MagicMock()
+                mock_seg_cls.return_value = mock_seg
+                source_dir, gen_dir = segment(frames, args, directory, g, generated_only=True)
+                mock_seg_cls.assert_called_once_with(model_name_or_path='briaai/RMBG-1.4', device=expected_device)
+                mock_seg.segment_directory.assert_called_once()
+                call_args = mock_seg.segment_directory.call_args[0]
+                self.assertEqual(Path(call_args[0]).name, 'generated')
+                self.assertEqual(Path(call_args[1]).name, 'generated_masks')
 
 
 if __name__ == '__main__': unittest.main()

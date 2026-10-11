@@ -10,9 +10,11 @@ def add_arguments(parser):
                         help='Transparent MOV encoder: editing-friendly ProRes 4444 or lossless QTRLE')
     parser.add_argument('--mode', choices=('replace', 'generate'), default='replace',
                         help='replace keeps the source shot; generate is the previous full-frame mode')
-    parser.add_argument('--sam2_python', default=sys.executable, help='Python executable in a separate SAM 2 environment')
-    parser.add_argument('--sam2_checkpoint', default='models/sam2.1_hiera_small.pt')
-    parser.add_argument('--sam2_model_config', default='configs/sam2.1/sam2.1_hiera_s.yaml')
+    parser.add_argument('--segmentation_model', default='briaai/RMBG-1.4',
+                        help='High-accuracy segmentation model repo ID or path (default: briaai/RMBG-1.4)')
+    parser.add_argument('--sam2_python', default=sys.executable, help='Deprecated: Python executable for segmentation')
+    parser.add_argument('--sam2_checkpoint', default='models/sam2.1_hiera_small.pt', help='Deprecated SAM 2 checkpoint')
+    parser.add_argument('--sam2_model_config', default='configs/sam2.1/sam2.1_hiera_s.yaml', help='Deprecated SAM 2 config')
     parser.add_argument('--lama_checkpoint', default='models/big-lama.pt', help='Simple-LaMa two-tensor TorchScript model')
     parser.add_argument('--no_ai_background', action='store_true', help='Fail if original frames cannot fill every visible hole')
     parser.add_argument('--source_masks', help='Optional reviewed source actor masks directory (single task)')
